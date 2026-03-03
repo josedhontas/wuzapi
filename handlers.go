@@ -38,8 +38,83 @@ type Values struct {
 	m map[string]string
 }
 
+type manualDownloadMediaPayload struct {
+	Url           string
+	DirectPath    string
+	MediaKey      []byte
+	Mimetype      string
+	FileEncSHA256 []byte
+	FileSHA256    []byte
+	FileLength    uint64
+}
+
 func (v Values) Get(key string) string {
 	return v.m[key]
+}
+
+func isNewsletterJID(jid types.JID) bool {
+	return jid.Server == types.NewsletterServer
+}
+
+func uploadMediaForRecipient(ctx context.Context, cli *whatsmeow.Client, recipient types.JID, data []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	if isNewsletterJID(recipient) {
+		return cli.UploadNewsletter(ctx, data, mediaType)
+	}
+	return cli.Upload(ctx, data, mediaType)
+}
+
+func makeSendRequestExtra(recipient types.JID, messageID string, upload *whatsmeow.UploadResponse) whatsmeow.SendRequestExtra {
+	extra := whatsmeow.SendRequestExtra{ID: types.MessageID(messageID)}
+	if isNewsletterJID(recipient) && upload != nil {
+		extra.MediaHandle = upload.Handle
+	}
+	return extra
+}
+
+func (s *server) downloadManualMedia(ctx context.Context, cli *whatsmeow.Client, payload manualDownloadMediaPayload, msg whatsmeow.DownloadableMessage, mediaType whatsmeow.MediaType, mmsType string) ([]byte, error) {
+	if len(payload.MediaKey) > 0 {
+		return cli.Download(ctx, msg)
+	}
+
+	// Channel/newsletter media can be served unencrypted. In that case, avoid the
+	// encrypted-media path even if FileEncSHA256 is present in the payload.
+	if len(payload.Url) > 0 && !strings.HasPrefix(payload.Url, "https://web.whatsapp.net") {
+		return cli.DangerousInternals().DownloadMedia(ctx, payload.Url)
+	}
+
+	if len(payload.DirectPath) == 0 {
+		return nil, whatsmeow.ErrNoURLPresent
+	}
+	if !strings.HasPrefix(payload.DirectPath, "/") {
+		return nil, fmt.Errorf("media download path does not start with slash: %s", payload.DirectPath)
+	}
+
+	mediaConn, err := cli.DangerousInternals().RefreshMediaConn(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh media connections: %w", err)
+	}
+
+	hash := payload.FileSHA256
+	if len(hash) == 0 {
+		hash = payload.FileEncSHA256
+	}
+	hashParam := base64.URLEncoding.EncodeToString(hash)
+
+	var lastErr error
+	for i, host := range mediaConn.Hosts {
+		mediaURL := fmt.Sprintf("https://%s%s&hash=%s&mms-type=%s&__wa-mms=", host.Hostname, payload.DirectPath, hashParam, mmsType)
+		data, err := cli.DangerousInternals().DownloadMedia(ctx, mediaURL)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+		if i >= len(mediaConn.Hosts)-1 {
+			break
+		}
+		log.Warn().Err(err).Str("host", host.Hostname).Msg("Failed to download unencrypted media, trying next host")
+	}
+
+	return nil, fmt.Errorf("failed to download media from last host: %w", lastErr)
 }
 
 func (s *server) GetHealth() http.HandlerFunc {
@@ -881,7 +956,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 				return
 			} else {
 				filedata = dataURL.Data
-				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaDocument)
+				uploaded, err = uploadMediaForRecipient(context.Background(), clientManager.GetWhatsmeowClient(txtid), recipient, filedata, whatsmeow.MediaDocument)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 					return
@@ -942,7 +1017,7 @@ func (s *server) SendDocument() http.HandlerFunc {
 			msg.DocumentMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, makeSendRequestExtra(recipient, msgid, &uploaded))
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1032,7 +1107,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 				return
 			} else {
 				filedata = dataURL.Data
-				uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaAudio)
+				uploaded, err = uploadMediaForRecipient(context.Background(), clientManager.GetWhatsmeowClient(txtid), recipient, filedata, whatsmeow.MediaAudio)
 				if err != nil {
 					s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 					return
@@ -1108,7 +1183,7 @@ func (s *server) SendAudio() http.HandlerFunc {
 			msg.AudioMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, makeSendRequestExtra(recipient, msgid, &uploaded))
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1219,7 +1294,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		uploaded, err = uploadMediaForRecipient(context.Background(), clientManager.GetWhatsmeowClient(txtid), recipient, filedata, whatsmeow.MediaImage)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
@@ -1306,7 +1381,7 @@ func (s *server) SendImage() http.HandlerFunc {
 			msg.ImageMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, makeSendRequestExtra(recipient, msgid, &uploaded))
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1405,7 +1480,12 @@ func (s *server) SendSticker() http.HandlerFunc {
 			return
 		}
 
-		uploaded, err := clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), processedData, whatsmeow.MediaImage)
+		if isNewsletterJID(recipient) {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("stickers are not supported for newsletter recipients"))
+			return
+		}
+
+		uploaded, err := uploadMediaForRecipient(context.Background(), clientManager.GetWhatsmeowClient(txtid), recipient, processedData, whatsmeow.MediaImage)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Failed to upload file: %v", err)))
 			return
@@ -1455,7 +1535,7 @@ func (s *server) SendSticker() http.HandlerFunc {
 			msg.StickerMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, makeSendRequestExtra(recipient, msgid, &uploaded))
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
@@ -1568,7 +1648,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 			return
 		}
 
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaVideo)
+		uploaded, err = uploadMediaForRecipient(context.Background(), clientManager.GetWhatsmeowClient(txtid), recipient, filedata, whatsmeow.MediaVideo)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
@@ -1624,7 +1704,7 @@ func (s *server) SendVideo() http.HandlerFunc {
 			msg.VideoMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, makeSendRequestExtra(recipient, msgid, &uploaded))
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
 			return
@@ -3163,17 +3243,6 @@ func (s *server) ChatPresence() http.HandlerFunc {
 
 // Downloads Image and returns base64 representation
 func (s *server) DownloadImage() http.HandlerFunc {
-
-	type downloadImageStruct struct {
-		Url           string
-		DirectPath    string
-		MediaKey      []byte
-		Mimetype      string
-		FileEncSHA256 []byte
-		FileSHA256    []byte
-		FileLength    uint64
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -3198,7 +3267,7 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		var t downloadImageStruct
+		var t manualDownloadMediaPayload
 		err = decoder.Decode(&t)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
@@ -3218,7 +3287,7 @@ func (s *server) DownloadImage() http.HandlerFunc {
 		img := msg.GetImageMessage()
 
 		if img != nil {
-			imgdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), img)
+			imgdata, err = s.downloadManualMedia(context.Background(), clientManager.GetWhatsmeowClient(txtid), t, img, whatsmeow.MediaImage, "image")
 			if err != nil {
 				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download image")
 				msg := fmt.Sprintf("failed to download image %v", err)
@@ -3242,17 +3311,6 @@ func (s *server) DownloadImage() http.HandlerFunc {
 
 // Downloads Document and returns base64 representation
 func (s *server) DownloadDocument() http.HandlerFunc {
-
-	type downloadDocumentStruct struct {
-		Url           string
-		DirectPath    string
-		MediaKey      []byte
-		Mimetype      string
-		FileEncSHA256 []byte
-		FileSHA256    []byte
-		FileLength    uint64
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -3277,7 +3335,7 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		var t downloadDocumentStruct
+		var t manualDownloadMediaPayload
 		err = decoder.Decode(&t)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
@@ -3297,7 +3355,7 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 		doc := msg.GetDocumentMessage()
 
 		if doc != nil {
-			docdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), doc)
+			docdata, err = s.downloadManualMedia(context.Background(), clientManager.GetWhatsmeowClient(txtid), t, doc, whatsmeow.MediaDocument, "document")
 			if err != nil {
 				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download document")
 				msg := fmt.Sprintf("failed to download document %v", err)
@@ -3321,17 +3379,6 @@ func (s *server) DownloadDocument() http.HandlerFunc {
 
 // Downloads Video and returns base64 representation
 func (s *server) DownloadVideo() http.HandlerFunc {
-
-	type downloadVideoStruct struct {
-		Url           string
-		DirectPath    string
-		MediaKey      []byte
-		Mimetype      string
-		FileEncSHA256 []byte
-		FileSHA256    []byte
-		FileLength    uint64
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -3356,7 +3403,7 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		var t downloadVideoStruct
+		var t manualDownloadMediaPayload
 		err = decoder.Decode(&t)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
@@ -3376,7 +3423,7 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 		doc := msg.GetVideoMessage()
 
 		if doc != nil {
-			docdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), doc)
+			docdata, err = s.downloadManualMedia(context.Background(), clientManager.GetWhatsmeowClient(txtid), t, doc, whatsmeow.MediaVideo, "video")
 			if err != nil {
 				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download video")
 				msg := fmt.Sprintf("failed to download video %v", err)
@@ -3400,17 +3447,6 @@ func (s *server) DownloadVideo() http.HandlerFunc {
 
 // Downloads Audio and returns base64 representation
 func (s *server) DownloadAudio() http.HandlerFunc {
-
-	type downloadAudioStruct struct {
-		Url           string
-		DirectPath    string
-		MediaKey      []byte
-		Mimetype      string
-		FileEncSHA256 []byte
-		FileSHA256    []byte
-		FileLength    uint64
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -3435,7 +3471,7 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		var t downloadAudioStruct
+		var t manualDownloadMediaPayload
 		err = decoder.Decode(&t)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
@@ -3455,7 +3491,7 @@ func (s *server) DownloadAudio() http.HandlerFunc {
 		doc := msg.GetAudioMessage()
 
 		if doc != nil {
-			docdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), doc)
+			docdata, err = s.downloadManualMedia(context.Background(), clientManager.GetWhatsmeowClient(txtid), t, doc, whatsmeow.MediaAudio, "audio")
 			if err != nil {
 				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download audio")
 				msg := fmt.Sprintf("failed to download audio %v", err)
@@ -6491,17 +6527,6 @@ func (s *server) ArchiveChat() http.HandlerFunc {
 
 // Downloads Sticker and returns base64 representation
 func (s *server) DownloadSticker() http.HandlerFunc {
-
-	type downloadStickerStruct struct {
-		Url           string
-		DirectPath    string
-		MediaKey      []byte
-		Mimetype      string
-		FileEncSHA256 []byte
-		FileSHA256    []byte
-		FileLength    uint64
-	}
-
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -6526,7 +6551,7 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		}
 
 		decoder := json.NewDecoder(r.Body)
-		var t downloadStickerStruct
+		var t manualDownloadMediaPayload
 		err = decoder.Decode(&t)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
@@ -6546,7 +6571,7 @@ func (s *server) DownloadSticker() http.HandlerFunc {
 		sticker := msg.GetStickerMessage()
 
 		if sticker != nil {
-			stickerdata, err = clientManager.GetWhatsmeowClient(txtid).Download(context.Background(), sticker)
+			stickerdata, err = s.downloadManualMedia(context.Background(), clientManager.GetWhatsmeowClient(txtid), t, sticker, whatsmeow.MediaImage, "image")
 			if err != nil {
 				log.Error().Str("error", fmt.Sprintf("%v", err)).Msg("failed to download sticker")
 				msg := fmt.Sprintf("failed to download sticker %v", err)
