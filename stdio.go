@@ -487,6 +487,10 @@ func (ss *stdioServer) executeHTTPHandler(req *jsonRpcRequest, httpMethod, httpP
 	if token, ok := req.Params["token"].(string); ok {
 		httpReq.Header.Set("token", token)
 	}
+	// Optional user selector for duplicate tokens
+	if userID, ok := req.Params["userId"].(string); ok {
+		httpReq.Header.Set("X-User-ID", userID)
+	}
 	// Set admin token header (for admin authentication)
 	if adminToken, ok := req.Params["adminToken"].(string); ok {
 		httpReq.Header.Set("Authorization", adminToken)

@@ -234,6 +234,76 @@ func updateUserInfo(values interface{}, field string, value string) interface{} 
 	return values
 }
 
+func buildUserCacheKey(token string, userID string) string {
+	if token == "" {
+		return ""
+	}
+	if userID == "" {
+		return token
+	}
+	return token + "::" + userID
+}
+
+func getUserCacheKeyFromValues(v Values) string {
+	if cacheKey := v.Get("CacheKey"); cacheKey != "" {
+		return cacheKey
+	}
+	return buildUserCacheKey(v.Get("Token"), v.Get("Id"))
+}
+
+func getUserCacheKeyFromContext(r *http.Request) string {
+	userInfo, ok := r.Context().Value("userinfo").(Values)
+	if !ok {
+		return ""
+	}
+	return getUserCacheKeyFromValues(userInfo)
+}
+
+func getUserInfoFromCache(token string, userID string) (interface{}, bool) {
+	cacheKey := buildUserCacheKey(token, userID)
+	if cacheKey != "" {
+		if myuserinfo, found := userinfocache.Get(cacheKey); found {
+			return myuserinfo, true
+		}
+	}
+
+	// Backward compatibility for old cache entries keyed only by token.
+	myuserinfo, found := userinfocache.Get(token)
+	if !found {
+		return nil, false
+	}
+	if userID == "" {
+		return myuserinfo, true
+	}
+
+	values, ok := myuserinfo.(Values)
+	if !ok {
+		return nil, false
+	}
+	return myuserinfo, values.Get("Id") == userID
+}
+
+func setUserInfoCache(v Values) {
+	cacheKey := getUserCacheKeyFromValues(v)
+	if cacheKey == "" {
+		cacheKey = v.Get("Token")
+	}
+	if cacheKey == "" {
+		return
+	}
+	userinfocache.Set(cacheKey, v, cache.NoExpiration)
+}
+
+func deleteUserInfoCache(token string, userID string) {
+	cacheKey := buildUserCacheKey(token, userID)
+	if cacheKey != "" {
+		userinfocache.Delete(cacheKey)
+	}
+	if userID == "" {
+		userinfocache.Delete(token)
+	}
+}
+
 // webhook for regular messages
 func callHook(myurl string, payload map[string]string, userID string) {
 	callHookWithHmac(myurl, payload, userID, nil)

@@ -234,7 +234,7 @@ func sendToGlobalRabbit(jsonData []byte, token string, userID string, queueName 
 
 	// Extract instance information
 	instance_name := ""
-	userinfo, found := userinfocache.Get(token)
+	userinfo, found := getUserInfoFromCache(token, userID)
 	if found {
 		instance_name = userinfo.(Values).Get("Name")
 	}
