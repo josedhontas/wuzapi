@@ -4852,25 +4852,6 @@ func (s *server) AddUser() http.HandlerFunc {
 			}
 		}
 
-		// Check for existing user
-		var count int
-		if err := s.db.Get(&count, "SELECT COUNT(*) FROM users WHERE token = $1", user.Token); err != nil {
-			s.respondWithJSON(w, http.StatusInternalServerError, map[string]interface{}{
-				"code":    http.StatusInternalServerError,
-				"error":   "database error",
-				"success": false,
-			})
-			return
-		}
-		if count > 0 {
-			s.respondWithJSON(w, http.StatusConflict, map[string]interface{}{
-				"code":    http.StatusConflict,
-				"error":   "user with this token already exists",
-				"success": false,
-			})
-			return
-		}
-
 		// Validate events
 		eventList := strings.Split(user.Events, ",")
 		for _, event := range eventList {
