@@ -2446,6 +2446,22 @@ definitions:
         type: boolean
         description: "Set to true to enable link preview generation (default is false)"
         example: true
+      PreviewURL:
+        type: string
+        description: "Optional URL to use as the preview target. Overrides the first URL found in Body."
+        example: "https://example.com"
+      PreviewTitle:
+        type: string
+        description: "Optional custom title for the link preview."
+        example: "Custom preview title"
+      PreviewDescription:
+        type: string
+        description: "Optional custom description for the link preview."
+        example: "Custom preview description"
+      PreviewImage:
+        type: string
+        description: "Optional custom preview image. Accepts http/https URLs, data URLs, or raw base64 image data."
+        example: "https://example.com/preview.jpg"
       Id:
         type: string
         example: "ABCDABCD1234"

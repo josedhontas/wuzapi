@@ -252,18 +252,18 @@ func (s *server) authalice(next http.Handler) http.Handler {
 				log.Debug().Str("userId", txtid).Bool("historyValid", history.Valid).Int64("historyValue", history.Int64).Str("historyStr", historyStr).Msg("User authentication - history debug")
 
 				v := Values{map[string]string{
-					"Id":             txtid,
-					"Name":           name,
-					"Jid":            jid,
-					"Webhook":        webhook,
-					"Token":          token,
-					"Proxy":          proxy_url,
-					"Events":         events,
-					"Qrcode":         qrcode,
-					"History":        historyStr,
-					"HasHmac":        strconv.FormatBool(hasHmac),
-					"S3Enabled":      s3Enabled,
-					"MediaDelivery":  mediaDelivery,
+					"Id":            txtid,
+					"Name":          name,
+					"Jid":           jid,
+					"Webhook":       webhook,
+					"Token":         token,
+					"Proxy":         proxy_url,
+					"Events":        events,
+					"Qrcode":        qrcode,
+					"History":       historyStr,
+					"HasHmac":       strconv.FormatBool(hasHmac),
+					"S3Enabled":     s3Enabled,
+					"MediaDelivery": mediaDelivery,
 				}}
 
 				userinfocache.Set(token, v, cache.NoExpiration)
@@ -888,13 +888,13 @@ func (s *server) GetStatus() http.HandlerFunc {
 func (s *server) SendDocument() http.HandlerFunc {
 
 	type documentStruct struct {
-		Caption     string
-		Phone       string
-		Document    string
-		FileName    string
-		Id          string
-		MimeType    string
-		ContextInfo waE2E.ContextInfo
+		Caption       string
+		Phone         string
+		Document      string
+		FileName      string
+		Id            string
+		MimeType      string
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -1043,15 +1043,15 @@ func (s *server) SendDocument() http.HandlerFunc {
 func (s *server) SendAudio() http.HandlerFunc {
 
 	type audioStruct struct {
-		Phone       string
-		Audio       string
-		Caption     string
-		Id          string
-		PTT         *bool  `json:"ptt,omitempty"`
-		MimeType    string `json:"mimetype,omitempty"`
-		Seconds     uint32
-		Waveform    []byte
-		ContextInfo waE2E.ContextInfo
+		Phone         string
+		Audio         string
+		Caption       string
+		Id            string
+		PTT           *bool  `json:"ptt,omitempty"`
+		MimeType      string `json:"mimetype,omitempty"`
+		Seconds       uint32
+		Waveform      []byte
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -1730,11 +1730,11 @@ func (s *server) SendVideo() http.HandlerFunc {
 func (s *server) SendContact() http.HandlerFunc {
 
 	type contactStruct struct {
-		Phone       string
-		Id          string
-		Name        string
-		Vcard       string
-		ContextInfo waE2E.ContextInfo
+		Phone         string
+		Id            string
+		Name          string
+		Vcard         string
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -1847,12 +1847,12 @@ func (s *server) SendContact() http.HandlerFunc {
 func (s *server) SendLocation() http.HandlerFunc {
 
 	type locationStruct struct {
-		Phone       string
-		Id          string
-		Name        string
-		Latitude    float64
-		Longitude   float64
-		ContextInfo waE2E.ContextInfo
+		Phone         string
+		Id            string
+		Name          string
+		Latitude      float64
+		Longitude     float64
+		ContextInfo   waE2E.ContextInfo
 		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 
@@ -2273,13 +2273,17 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 // Sends a regular text message
 func (s *server) SendMessage() http.HandlerFunc {
 	type textStruct struct {
-		Phone         string
-		Body          string
-		LinkPreview   bool
-		Id            string
-		ContextInfo   waE2E.ContextInfo
-		QuotedText    string          `json:"QuotedText,omitempty"`
-		QuotedMessage *waE2E.Message  `json:"QuotedMessage,omitempty"`
+		Phone              string
+		Body               string
+		LinkPreview        bool
+		PreviewURL         string `json:"PreviewURL,omitempty"`
+		PreviewTitle       string `json:"PreviewTitle,omitempty"`
+		PreviewDescription string `json:"PreviewDescription,omitempty"`
+		PreviewImage       string `json:"PreviewImage,omitempty"`
+		Id                 string
+		ContextInfo        waE2E.ContextInfo
+		QuotedText         string         `json:"QuotedText,omitempty"`
+		QuotedMessage      *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -2315,26 +2319,45 @@ func (s *server) SendMessage() http.HandlerFunc {
 		} else {
 			msgid = t.Id
 		}
-		var (
-			url         string
-			title       string
-			description string
-			imageData   []byte
+		previewData, err := buildTextLinkPreview(
+			r.Context(),
+			txtid,
+			t.Body,
+			t.LinkPreview,
+			t.PreviewURL,
+			t.PreviewTitle,
+			t.PreviewDescription,
+			t.PreviewImage,
 		)
-		if t.LinkPreview {
-			url = extractFirstURL(t.Body)
-			if url != "" {
-				title, description, imageData = getOpenGraphData(r.Context(), url, txtid)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+		extendedTextMessage := &waE2E.ExtendedTextMessage{
+			Text: proto.String(t.Body),
+		}
+		if previewData.MatchedText != "" {
+			extendedTextMessage.MatchedText = proto.String(previewData.MatchedText)
+		}
+		if previewData.Title != "" {
+			extendedTextMessage.Title = proto.String(previewData.Title)
+		}
+		if previewData.Description != "" {
+			extendedTextMessage.Description = proto.String(previewData.Description)
+		}
+		if len(previewData.ImageData) > 0 {
+			previewType := waE2E.ExtendedTextMessage_IMAGE
+			extendedTextMessage.JPEGThumbnail = previewData.ImageData
+			extendedTextMessage.PreviewType = &previewType
+			if previewData.ImageWidth > 0 {
+				extendedTextMessage.ThumbnailWidth = proto.Uint32(previewData.ImageWidth)
+			}
+			if previewData.ImageHeight > 0 {
+				extendedTextMessage.ThumbnailHeight = proto.Uint32(previewData.ImageHeight)
 			}
 		}
 		msg := &waE2E.Message{
-			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-				Text:          proto.String(t.Body),
-				MatchedText:   proto.String(url),
-				Title:         proto.String(title),
-				Description:   proto.String(description),
-				JPEGThumbnail: imageData,
-			},
+			ExtendedTextMessage: extendedTextMessage,
 		}
 		if t.ContextInfo.StanzaID != nil {
 			var qm *waE2E.Message

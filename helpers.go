@@ -8,6 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -50,6 +51,7 @@ const (
 	openGraphThumbnailHeight = 100
 	openGraphJpegQuality     = 80
 	openGraphMaxImageDim     = 4000 // Max width or height for Open Graph images
+	openGraphMinImageDim     = 24   // Skip tiny tracking pixels and very small favicons
 	openGraphUserFetchLimit  = 20   // Limit concurrent Open Graph fetches per user
 
 	// WebP RIFF container constants
@@ -90,6 +92,17 @@ type openGraphResult struct {
 	Title       string
 	Description string
 	ImageData   []byte
+	ImageWidth  uint32
+	ImageHeight uint32
+}
+
+type textLinkPreviewData struct {
+	MatchedText string
+	Title       string
+	Description string
+	ImageData   []byte
+	ImageWidth  uint32
+	ImageHeight uint32
 }
 
 type UserSemaphoreManager struct {
@@ -137,9 +150,22 @@ func isHTTPURL(input string) bool {
 	return parsed.Host != ""
 }
 func fetchURLBytes(ctx context.Context, resourceURL string, limit int64) ([]byte, string, error) {
+	return fetchURLBytesWithOptions(ctx, resourceURL, limit, "", "")
+}
+
+func fetchURLBytesWithOptions(ctx context.Context, resourceURL string, limit int64, accept string, referer string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", resourceURL, nil)
 	if err != nil {
 		return nil, "", err
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; WuzAPI/1.0; +https://github.com/asternic/wuzapi)")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if referer != "" {
+		req.Header.Set("Referer", referer)
 	}
 
 	resp, err := globalHTTPClient.Do(req)
@@ -169,12 +195,12 @@ func fetchURLBytes(ctx context.Context, resourceURL string, limit int64) ([]byte
 	return data, contentType, nil
 }
 
-func getOpenGraphData(ctx context.Context, urlStr string, userID string) (title, description string, imageData []byte) {
+func getOpenGraphData(ctx context.Context, urlStr string, userID string) openGraphResult {
 	// Check cache first
 	if cachedData, found := openGraphCache.Get(urlStr); found {
 		if data, ok := cachedData.(openGraphResult); ok {
 			log.Debug().Str("url", urlStr).Msg("Open Graph data fetched from cache")
-			return data.Title, data.Description, data.ImageData
+			return data
 		}
 	}
 
@@ -206,25 +232,24 @@ func getOpenGraphData(ctx context.Context, urlStr string, userID string) (title,
 		}()
 
 		// Fetch Open Graph data
-		title, description, imageData := fetchOpenGraphData(ctx, urlStr)
+		result := fetchOpenGraphData(ctx, urlStr)
 
 		// Store in cache
-		openGraphCache.Set(urlStr, openGraphResult{title, description, imageData}, cache.DefaultExpiration)
+		openGraphCache.Set(urlStr, result, cache.DefaultExpiration)
 
-		return openGraphResult{title, description, imageData}, nil
+		return result, nil
 	})
 
 	if err != nil {
 		log.Error().Err(err).Str("url", urlStr).Msg("Error fetching Open Graph data via singleflight")
-		return "", "", nil
+		return openGraphResult{}
 	}
 
 	if v == nil {
-		return "", "", nil
+		return openGraphResult{}
 	}
 
-	data := v.(openGraphResult)
-	return data.Title, data.Description, data.ImageData
+	return v.(openGraphResult)
 }
 
 // Update entry in User map
@@ -642,100 +667,374 @@ func extractFirstURL(text string) string {
 
 	return match
 }
-func fetchOpenGraphData(ctx context.Context, urlStr string) (string, string, []byte) {
-	pageData, _, err := fetchURLBytes(ctx, urlStr, openGraphPageMaxBytes)
+
+func buildTextLinkPreview(ctx context.Context, userID, body string, linkPreview bool, previewURL, previewTitle, previewDescription, previewImage string) (textLinkPreviewData, error) {
+	preview := textLinkPreviewData{}
+	previewRequested := linkPreview || strings.TrimSpace(previewURL) != "" || strings.TrimSpace(previewTitle) != "" || strings.TrimSpace(previewDescription) != "" || strings.TrimSpace(previewImage) != ""
+	if !previewRequested {
+		return preview, nil
+	}
+
+	if strings.TrimSpace(previewURL) != "" {
+		if !isHTTPURL(previewURL) {
+			return preview, fmt.Errorf("PreviewURL must be a valid http or https URL")
+		}
+		preview.MatchedText = strings.TrimSpace(previewURL)
+	} else {
+		preview.MatchedText = extractFirstURL(body)
+	}
+
+	if preview.MatchedText != "" {
+		autoPreview := getOpenGraphData(ctx, preview.MatchedText, userID)
+		preview.Title = autoPreview.Title
+		preview.Description = autoPreview.Description
+		preview.ImageData = autoPreview.ImageData
+		preview.ImageWidth = autoPreview.ImageWidth
+		preview.ImageHeight = autoPreview.ImageHeight
+	}
+
+	if strings.TrimSpace(previewTitle) != "" {
+		preview.Title = normalizeMetaText(previewTitle)
+	}
+	if strings.TrimSpace(previewDescription) != "" {
+		preview.Description = normalizeMetaText(previewDescription)
+	}
+	if strings.TrimSpace(previewImage) != "" {
+		var pageURL *url.URL
+		if preview.MatchedText != "" {
+			pageURL, _ = url.Parse(preview.MatchedText)
+		}
+		imageData, width, height, err := loadPreviewThumbnail(ctx, previewImage, pageURL)
+		if err != nil {
+			return preview, fmt.Errorf("failed to prepare PreviewImage: %w", err)
+		}
+		preview.ImageData = imageData
+		preview.ImageWidth = width
+		preview.ImageHeight = height
+	}
+
+	return preview, nil
+}
+
+func fetchOpenGraphData(ctx context.Context, urlStr string) openGraphResult {
+	pageData, contentType, err := fetchURLBytesWithOptions(ctx, urlStr, openGraphPageMaxBytes, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "")
 	if err != nil {
 		log.Warn().Err(err).Str("url", urlStr).Msg("Failed to fetch URL for Open Graph data")
-		return "", "", nil
+		return openGraphResult{}
+	}
+
+	pageURL, err := url.Parse(urlStr)
+	if err != nil {
+		log.Warn().Err(err).Str("url", urlStr).Msg("Failed to parse page URL for Open Graph data")
+		return openGraphResult{}
+	}
+
+	if strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		imageData, width, height, thumbErr := createJPEGThumbnail(pageData)
+		if thumbErr != nil {
+			log.Warn().Err(thumbErr).Str("url", urlStr).Msg("Failed to build preview thumbnail from direct image URL")
+			return openGraphResult{}
+		}
+		return openGraphResult{
+			Title:       pageURL.Hostname(),
+			ImageData:   imageData,
+			ImageWidth:  width,
+			ImageHeight: height,
+		}
 	}
 
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(pageData))
 	if err != nil {
 		log.Warn().Err(err).Str("url", urlStr).Msg("Failed to parse HTML for Open Graph data")
-		return "", "", nil
+		return openGraphResult{}
 	}
 
-	title := doc.Find(`meta[property="og:title"]`).AttrOr("content", "")
-	if title == "" {
-		title = strings.TrimSpace(doc.Find("title").Text())
+	result := openGraphResult{
+		Title: normalizeMetaText(firstNonEmptySelectionAttr(doc, []selectorAttr{
+			{`meta[property="og:title"]`, "content"},
+			{`meta[name="twitter:title"]`, "content"},
+			{`meta[property="twitter:title"]`, "content"},
+			{`meta[name="title"]`, "content"},
+			{`meta[itemprop="headline"]`, "content"},
+			{`meta[itemprop="name"]`, "content"},
+		})),
+		Description: normalizeMetaText(firstNonEmptySelectionAttr(doc, []selectorAttr{
+			{`meta[property="og:description"]`, "content"},
+			{`meta[name="twitter:description"]`, "content"},
+			{`meta[property="twitter:description"]`, "content"},
+			{`meta[name="description"]`, "content"},
+			{`meta[name="Description"]`, "content"},
+			{`meta[itemprop="description"]`, "content"},
+		})),
 	}
 
-	description := doc.Find(`meta[property="og:description"]`).AttrOr("content", "")
-	if description == "" {
-		description = doc.Find(`meta[name="description"]`).AttrOr("content", "")
+	if result.Title == "" {
+		result.Title = normalizeMetaText(doc.Find("title").First().Text())
 	}
 
-	var imageURLStr string
-	selectors := []struct {
+	imageCandidates := collectOpenGraphImageCandidates(doc)
+	for _, candidate := range imageCandidates {
+		imageData, width, height, imageErr := fetchOpenGraphImage(ctx, pageURL, candidate)
+		if imageErr != nil {
+			log.Debug().Err(imageErr).Str("imageURL", candidate).Str("url", urlStr).Msg("Skipping Open Graph image candidate")
+			continue
+		}
+		result.ImageData = imageData
+		result.ImageWidth = width
+		result.ImageHeight = height
+		break
+	}
+
+	return result
+}
+
+type selectorAttr struct {
+	selector string
+	attr     string
+}
+
+func firstNonEmptySelectionAttr(doc *goquery.Document, selectors []selectorAttr) string {
+	for _, s := range selectors {
+		value := normalizeMetaText(doc.Find(s.selector).First().AttrOr(s.attr, ""))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func normalizeMetaText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func collectOpenGraphImageCandidates(doc *goquery.Document) []string {
+	type candidateSelector struct {
 		selector string
 		attr     string
-	}{
-		{`meta[property="og:image"]`, "content"},
-		{`meta[property="twitter:image"]`, "content"},
-		{`link[rel="apple-touch-icon"]`, "href"},
-		{`link[rel="icon"]`, "href"},
+		max      int
+	}
+
+	selectors := []candidateSelector{
+		{`meta[property="og:image"]`, "content", 3},
+		{`meta[property="og:image:url"]`, "content", 3},
+		{`meta[property="og:image:secure_url"]`, "content", 3},
+		{`meta[name="twitter:image"]`, "content", 3},
+		{`meta[name="twitter:image:src"]`, "content", 3},
+		{`meta[property="twitter:image"]`, "content", 3},
+		{`meta[property="twitter:image:src"]`, "content", 3},
+		{`meta[itemprop="image"]`, "content", 3},
+		{`link[rel="image_src"]`, "href", 2},
+		{`article img[src]`, "src", 3},
+		{`main img[src]`, "src", 3},
+		{`img[itemprop="image"]`, "src", 3},
+		{`img[srcset]`, "srcset", 3},
+		{`source[srcset]`, "srcset", 3},
+		{`img[src]`, "src", 5},
+		{`link[rel="apple-touch-icon"]`, "href", 2},
+		{`link[rel="apple-touch-icon-precomposed"]`, "href", 2},
+		{`link[rel="shortcut icon"]`, "href", 2},
+		{`link[rel="icon"]`, "href", 2},
+		{`link[rel*="icon"]`, "href", 2},
+	}
+
+	candidates := make([]string, 0, 16)
+	seen := make(map[string]struct{})
+	addCandidate := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if strings.HasPrefix(strings.ToLower(value), "javascript:") {
+			return
+		}
+		if _, found := seen[value]; found {
+			return
+		}
+		seen[value] = struct{}{}
+		candidates = append(candidates, value)
 	}
 
 	for _, s := range selectors {
-		imageURLStr, _ = doc.Find(s.selector).Attr(s.attr)
-		if imageURLStr != "" {
-			break
+		count := 0
+		doc.Find(s.selector).Each(func(_ int, selection *goquery.Selection) {
+			if count >= s.max {
+				return
+			}
+			value := strings.TrimSpace(selection.AttrOr(s.attr, ""))
+			if value == "" {
+				return
+			}
+			if s.attr == "srcset" {
+				for _, candidate := range parseSrcSet(value) {
+					addCandidate(candidate)
+				}
+			} else {
+				addCandidate(value)
+			}
+			count++
+		})
+	}
+
+	return candidates
+}
+
+func parseSrcSet(srcSet string) []string {
+	parts := strings.Split(srcSet, ",")
+	candidates := make([]string, 0, len(parts))
+	for i := len(parts) - 1; i >= 0; i-- {
+		fields := strings.Fields(strings.TrimSpace(parts[i]))
+		if len(fields) == 0 {
+			continue
+		}
+		candidates = append(candidates, fields[0])
+	}
+	return candidates
+}
+
+func loadPreviewThumbnail(ctx context.Context, imageRef string, pageURL *url.URL) ([]byte, uint32, uint32, error) {
+	imageBytes, err := loadPreviewImageBytes(ctx, imageRef, pageURL)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return createJPEGThumbnail(imageBytes)
+}
+
+func loadPreviewImageBytes(ctx context.Context, imageRef string, pageURL *url.URL) ([]byte, error) {
+	imageRef = strings.TrimSpace(imageRef)
+	if imageRef == "" {
+		return nil, fmt.Errorf("image reference is empty")
+	}
+
+	if strings.HasPrefix(strings.ToLower(imageRef), "data:image") {
+		dataURL, err := dataurl.DecodeString(imageRef)
+		if err != nil {
+			return nil, fmt.Errorf("could not decode data URL image: %w", err)
+		}
+		return dataURL.Data, nil
+	}
+
+	if rawBytes, ok := decodeRawBase64Image(imageRef); ok {
+		return rawBytes, nil
+	}
+
+	resolvedURL, err := resolvePreviewImageURL(pageURL, imageRef)
+	if err != nil {
+		return nil, err
+	}
+
+	imageBytes, _, err := fetchURLBytesWithOptions(ctx, resolvedURL, openGraphImageMaxBytes, "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", refererForPreview(pageURL))
+	if err != nil {
+		return nil, err
+	}
+	return imageBytes, nil
+}
+
+func decodeRawBase64Image(raw string) ([]byte, bool) {
+	if strings.Contains(raw, "://") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "data:") || strings.Contains(raw, "\\") {
+		return nil, false
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t', ' ':
+			return -1
+		default:
+			return r
+		}
+	}, raw)
+	if len(cleaned) < 32 {
+		return nil, false
+	}
+	data, err := base64.StdEncoding.DecodeString(cleaned)
+	if err != nil {
+		data, err = base64.RawStdEncoding.DecodeString(cleaned)
+		if err != nil {
+			data, err = base64.URLEncoding.DecodeString(cleaned)
+			if err != nil {
+				data, err = base64.RawURLEncoding.DecodeString(cleaned)
+				if err != nil {
+					return nil, false
+				}
+			}
+		}
+	}
+	return data, true
+}
+
+func refererForPreview(pageURL *url.URL) string {
+	if pageURL == nil {
+		return ""
+	}
+	return pageURL.String()
+}
+
+func resolvePreviewImageURL(pageURL *url.URL, imageURLStr string) (string, error) {
+	if strings.HasPrefix(imageURLStr, "//") {
+		if pageURL != nil && pageURL.Scheme != "" {
+			imageURLStr = pageURL.Scheme + ":" + imageURLStr
+		} else {
+			imageURLStr = "https:" + imageURLStr
 		}
 	}
 
-	pageURL, err := url.Parse(urlStr)
-	if err != nil {
-		log.Warn().Err(err).Str("url", urlStr).Msg("Failed to parse page URL for resolving image URL")
-		return title, description, nil
-	}
-
-	imageData := fetchOpenGraphImage(ctx, pageURL, imageURLStr)
-	return title, description, imageData
-}
-
-func fetchOpenGraphImage(ctx context.Context, pageURL *url.URL, imageURLStr string) []byte {
 	imageURL, err := url.Parse(imageURLStr)
 	if err != nil {
-		log.Warn().Err(err).Str("imageURL", imageURLStr).Msg("Failed to parse Open Graph image URL")
-		return nil
+		return "", fmt.Errorf("failed to parse image URL: %w", err)
 	}
 
-	resolvedImageURL := pageURL.ResolveReference(imageURL).String()
-	imgBytes, _, err := fetchURLBytes(ctx, resolvedImageURL, openGraphImageMaxBytes)
+	if !imageURL.IsAbs() {
+		if pageURL == nil {
+			return "", fmt.Errorf("relative image URL requires a page URL for resolution")
+		}
+		imageURL = pageURL.ResolveReference(imageURL)
+	}
+
+	if !isHTTPURL(imageURL.String()) {
+		return "", fmt.Errorf("image URL must resolve to http or https")
+	}
+
+	return imageURL.String(), nil
+}
+
+func fetchOpenGraphImage(ctx context.Context, pageURL *url.URL, imageURLStr string) ([]byte, uint32, uint32, error) {
+	imageBytes, err := loadPreviewImageBytes(ctx, imageURLStr, pageURL)
 	if err != nil {
-		log.Warn().Err(err).Str("imageURL", resolvedImageURL).Msg("Failed to fetch Open Graph image")
-		return nil
+		return nil, 0, 0, err
 	}
+	return createJPEGThumbnail(imageBytes)
+}
 
+func createJPEGThumbnail(imgBytes []byte) ([]byte, uint32, uint32, error) {
 	imgConfig, _, err := image.DecodeConfig(bytes.NewReader(imgBytes))
 	if err != nil {
-		log.Warn().Err(err).Str("imageURL", resolvedImageURL).Msg("Failed to decode Open Graph image config")
-		return nil
+		return nil, 0, 0, fmt.Errorf("failed to decode image config: %w", err)
 	}
 
 	if imgConfig.Width > openGraphMaxImageDim || imgConfig.Height > openGraphMaxImageDim {
-		log.Warn().
-			Int("width", imgConfig.Width).
-			Int("height", imgConfig.Height).
-			Str("imageURL", resolvedImageURL).
-			Msg("Open Graph image dimensions too large")
-		return nil
+		return nil, 0, 0, fmt.Errorf("image dimensions too large: %dx%d", imgConfig.Width, imgConfig.Height)
+	}
+	if imgConfig.Width < openGraphMinImageDim || imgConfig.Height < openGraphMinImageDim {
+		return nil, 0, 0, fmt.Errorf("image dimensions too small: %dx%d", imgConfig.Width, imgConfig.Height)
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(imgBytes))
 	if err != nil {
-		log.Warn().Err(err).Str("imageURL", resolvedImageURL).Msg("Failed to decode Open Graph image")
-		return nil
+		return nil, 0, 0, fmt.Errorf("failed to decode image: %w", err)
 	}
 
 	thumbnail := resize.Thumbnail(openGraphThumbnailWidth, openGraphThumbnailHeight, img, resize.Lanczos3)
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, thumbnail, &jpeg.Options{Quality: openGraphJpegQuality}); err != nil {
-		log.Warn().Err(err).Msg("Failed to encode thumbnail to JPEG")
-		return nil
+	bounds := thumbnail.Bounds()
+	width := uint32(bounds.Dx())
+	height := uint32(bounds.Dy())
+	if width == 0 || height == 0 {
+		return nil, 0, 0, fmt.Errorf("generated thumbnail has invalid dimensions")
 	}
 
-	return buf.Bytes()
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, thumbnail, &jpeg.Options{Quality: openGraphJpegQuality}); err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to encode JPEG thumbnail: %w", err)
+	}
+
+	return buf.Bytes(), width, height, nil
 }
 
 func runFFmpegConversion(input []byte, inputExt string, ffmpegArgs func(inPath, outPath string) []string, errMsg string) ([]byte, error) {
