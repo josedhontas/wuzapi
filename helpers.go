@@ -8,7 +8,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -668,50 +667,22 @@ func extractFirstURL(text string) string {
 	return match
 }
 
-func buildTextLinkPreview(ctx context.Context, userID, body string, linkPreview bool, previewURL, previewTitle, previewDescription, previewImage string) (textLinkPreviewData, error) {
+func buildTextLinkPreview(ctx context.Context, userID, body string, linkPreview bool) (textLinkPreviewData, error) {
 	preview := textLinkPreviewData{}
-	previewRequested := linkPreview || strings.TrimSpace(previewURL) != "" || strings.TrimSpace(previewTitle) != "" || strings.TrimSpace(previewDescription) != "" || strings.TrimSpace(previewImage) != ""
-	if !previewRequested {
+	if !linkPreview {
+		return preview, nil
+	}
+	preview.MatchedText = extractFirstURL(body)
+	if preview.MatchedText == "" {
 		return preview, nil
 	}
 
-	if strings.TrimSpace(previewURL) != "" {
-		if !isHTTPURL(previewURL) {
-			return preview, fmt.Errorf("PreviewURL must be a valid http or https URL")
-		}
-		preview.MatchedText = strings.TrimSpace(previewURL)
-	} else {
-		preview.MatchedText = extractFirstURL(body)
-	}
-
-	if preview.MatchedText != "" {
-		autoPreview := getOpenGraphData(ctx, preview.MatchedText, userID)
-		preview.Title = autoPreview.Title
-		preview.Description = autoPreview.Description
-		preview.ImageData = autoPreview.ImageData
-		preview.ImageWidth = autoPreview.ImageWidth
-		preview.ImageHeight = autoPreview.ImageHeight
-	}
-
-	if strings.TrimSpace(previewTitle) != "" {
-		preview.Title = normalizeMetaText(previewTitle)
-	}
-	if strings.TrimSpace(previewDescription) != "" {
-		preview.Description = normalizeMetaText(previewDescription)
-	}
-	if strings.TrimSpace(previewImage) != "" {
-		var pageURL *url.URL
-		if preview.MatchedText != "" {
-			pageURL, _ = url.Parse(preview.MatchedText)
-		}
-		imageData, width, height, err := loadPreviewThumbnail(ctx, previewImage, pageURL)
-		if err != nil {
-			return preview, fmt.Errorf("failed to prepare PreviewImage: %w", err)
-		}
-		preview.ImageData = imageData
-		preview.ImageWidth = width
-		preview.ImageHeight = height
-	}
+	autoPreview := getOpenGraphData(ctx, preview.MatchedText, userID)
+	preview.Title = autoPreview.Title
+	preview.Description = autoPreview.Description
+	preview.ImageData = autoPreview.ImageData
+	preview.ImageWidth = autoPreview.ImageWidth
+	preview.ImageHeight = autoPreview.ImageHeight
 
 	return preview, nil
 }
@@ -824,6 +795,17 @@ func collectOpenGraphImageCandidates(doc *goquery.Document) []string {
 		{`meta[property="twitter:image:src"]`, "content", 3},
 		{`meta[itemprop="image"]`, "content", 3},
 		{`link[rel="image_src"]`, "href", 2},
+		{`img#landingImage`, "data-old-hires", 1},
+		{`img#landingImage`, "data-a-dynamic-image", 1},
+		{`img#landingImage`, "src", 1},
+		{`img#imgBlkFront`, "data-old-hires", 1},
+		{`img#imgBlkFront`, "data-a-dynamic-image", 1},
+		{`img#imgBlkFront`, "src", 1},
+		{`img#ebooksImgBlkFront`, "data-old-hires", 1},
+		{`img#ebooksImgBlkFront`, "data-a-dynamic-image", 1},
+		{`img#ebooksImgBlkFront`, "src", 1},
+		{`img[data-old-hires]`, "data-old-hires", 3},
+		{`img[data-a-dynamic-image]`, "data-a-dynamic-image", 3},
 		{`article img[src]`, "src", 3},
 		{`main img[src]`, "src", 3},
 		{`img[itemprop="image"]`, "src", 3},
@@ -864,15 +846,24 @@ func collectOpenGraphImageCandidates(doc *goquery.Document) []string {
 			if value == "" {
 				return
 			}
-			if s.attr == "srcset" {
+			switch s.attr {
+			case "srcset":
 				for _, candidate := range parseSrcSet(value) {
 					addCandidate(candidate)
 				}
-			} else {
+			case "data-a-dynamic-image":
+				for _, candidate := range parseDynamicImageMap(value) {
+					addCandidate(candidate)
+				}
+			default:
 				addCandidate(value)
 			}
 			count++
 		})
+	}
+
+	for _, candidate := range collectJSONLDImageCandidates(doc) {
+		addCandidate(candidate)
 	}
 
 	return candidates
@@ -891,73 +882,86 @@ func parseSrcSet(srcSet string) []string {
 	return candidates
 }
 
-func loadPreviewThumbnail(ctx context.Context, imageRef string, pageURL *url.URL) ([]byte, uint32, uint32, error) {
-	imageBytes, err := loadPreviewImageBytes(ctx, imageRef, pageURL)
-	if err != nil {
-		return nil, 0, 0, err
+func parseDynamicImageMap(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
 	}
-	return createJPEGThumbnail(imageBytes)
+	var images map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &images); err != nil {
+		return nil
+	}
+	candidates := make([]string, 0, len(images))
+	for imageURL := range images {
+		candidates = append(candidates, imageURL)
+	}
+	return candidates
 }
 
-func loadPreviewImageBytes(ctx context.Context, imageRef string, pageURL *url.URL) ([]byte, error) {
-	imageRef = strings.TrimSpace(imageRef)
-	if imageRef == "" {
-		return nil, fmt.Errorf("image reference is empty")
-	}
-
-	if strings.HasPrefix(strings.ToLower(imageRef), "data:image") {
-		dataURL, err := dataurl.DecodeString(imageRef)
-		if err != nil {
-			return nil, fmt.Errorf("could not decode data URL image: %w", err)
+func collectJSONLDImageCandidates(doc *goquery.Document) []string {
+	candidates := make([]string, 0, 8)
+	doc.Find(`script[type="application/ld+json"]`).Each(func(_ int, selection *goquery.Selection) {
+		raw := strings.TrimSpace(selection.Text())
+		if raw == "" {
+			return
 		}
-		return dataURL.Data, nil
-	}
-
-	if rawBytes, ok := decodeRawBase64Image(imageRef); ok {
-		return rawBytes, nil
-	}
-
-	resolvedURL, err := resolvePreviewImageURL(pageURL, imageRef)
-	if err != nil {
-		return nil, err
-	}
-
-	imageBytes, _, err := fetchURLBytesWithOptions(ctx, resolvedURL, openGraphImageMaxBytes, "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", refererForPreview(pageURL))
-	if err != nil {
-		return nil, err
-	}
-	return imageBytes, nil
+		var decoded any
+		if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+			return
+		}
+		collectImageCandidatesFromJSON(decoded, &candidates)
+	})
+	return candidates
 }
 
-func decodeRawBase64Image(raw string) ([]byte, bool) {
-	if strings.Contains(raw, "://") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "data:") || strings.Contains(raw, "\\") {
-		return nil, false
-	}
-	cleaned := strings.Map(func(r rune) rune {
-		switch r {
-		case '\n', '\r', '\t', ' ':
-			return -1
-		default:
-			return r
-		}
-	}, raw)
-	if len(cleaned) < 32 {
-		return nil, false
-	}
-	data, err := base64.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		data, err = base64.RawStdEncoding.DecodeString(cleaned)
-		if err != nil {
-			data, err = base64.URLEncoding.DecodeString(cleaned)
-			if err != nil {
-				data, err = base64.RawURLEncoding.DecodeString(cleaned)
-				if err != nil {
-					return nil, false
+func collectImageCandidatesFromJSON(value any, candidates *[]string) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, nested := range v {
+			lowerKey := strings.ToLower(key)
+			if lowerKey == "image" || lowerKey == "thumbnailurl" || lowerKey == "contenturl" || lowerKey == "url" {
+				switch imageValue := nested.(type) {
+				case string:
+					if isLikelyImageURL(imageValue) {
+						*candidates = append(*candidates, imageValue)
+					}
+				case []any:
+					for _, item := range imageValue {
+						if imageStr, ok := item.(string); ok && isLikelyImageURL(imageStr) {
+							*candidates = append(*candidates, imageStr)
+						}
+					}
+				case map[string]any:
+					collectImageCandidatesFromJSON(imageValue, candidates)
 				}
+				continue
 			}
+			collectImageCandidatesFromJSON(nested, candidates)
+		}
+	case []any:
+		for _, item := range v {
+			collectImageCandidatesFromJSON(item, candidates)
 		}
 	}
-	return data, true
+}
+
+func isLikelyImageURL(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	if strings.HasPrefix(value, "data:image") {
+		return true
+	}
+	for _, extension := range []string{".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"} {
+		if strings.Contains(value, extension) {
+			return true
+		}
+	}
+	if strings.Contains(value, "images") || strings.Contains(value, "image") {
+		return true
+	}
+	return isHTTPURL(value) || strings.HasPrefix(value, "//")
 }
 
 func refererForPreview(pageURL *url.URL) string {
@@ -996,7 +1000,11 @@ func resolvePreviewImageURL(pageURL *url.URL, imageURLStr string) (string, error
 }
 
 func fetchOpenGraphImage(ctx context.Context, pageURL *url.URL, imageURLStr string) ([]byte, uint32, uint32, error) {
-	imageBytes, err := loadPreviewImageBytes(ctx, imageURLStr, pageURL)
+	resolvedURL, err := resolvePreviewImageURL(pageURL, imageURLStr)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	imageBytes, _, err := fetchURLBytesWithOptions(ctx, resolvedURL, openGraphImageMaxBytes, "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", refererForPreview(pageURL))
 	if err != nil {
 		return nil, 0, 0, err
 	}
