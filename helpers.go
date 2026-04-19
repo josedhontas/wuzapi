@@ -8,6 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -667,13 +668,16 @@ func extractFirstURL(text string) string {
 	return match
 }
 
-func buildTextLinkPreview(ctx context.Context, userID, body string, linkPreview bool) (textLinkPreviewData, error) {
+func buildTextLinkPreview(ctx context.Context, userID, body string, linkPreview bool, previewImage string) (textLinkPreviewData, error) {
 	preview := textLinkPreviewData{}
-	if !linkPreview {
+	if !linkPreview && strings.TrimSpace(previewImage) == "" {
 		return preview, nil
 	}
 	preview.MatchedText = extractFirstURL(body)
 	if preview.MatchedText == "" {
+		if strings.TrimSpace(previewImage) != "" {
+			return preview, fmt.Errorf("PreviewImage requires a URL in Body")
+		}
 		return preview, nil
 	}
 
@@ -683,6 +687,16 @@ func buildTextLinkPreview(ctx context.Context, userID, body string, linkPreview 
 	preview.ImageData = autoPreview.ImageData
 	preview.ImageWidth = autoPreview.ImageWidth
 	preview.ImageHeight = autoPreview.ImageHeight
+
+	if strings.TrimSpace(previewImage) != "" {
+		imageData, width, height, err := decodePreviewImage(previewImage)
+		if err != nil {
+			return preview, fmt.Errorf("failed to decode PreviewImage: %w", err)
+		}
+		preview.ImageData = imageData
+		preview.ImageWidth = width
+		preview.ImageHeight = height
+	}
 
 	return preview, nil
 }
@@ -896,6 +910,62 @@ func parseDynamicImageMap(raw string) []string {
 		candidates = append(candidates, imageURL)
 	}
 	return candidates
+}
+
+func decodePreviewImage(raw string) ([]byte, uint32, uint32, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, 0, 0, fmt.Errorf("image is empty")
+	}
+
+	var imageBytes []byte
+	if strings.HasPrefix(strings.ToLower(raw), "data:image") {
+		dataURL, err := dataurl.DecodeString(raw)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("invalid data URL: %w", err)
+		}
+		imageBytes = dataURL.Data
+	} else {
+		decoded, err := decodeBase64Bytes(raw)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		imageBytes = decoded
+	}
+
+	return createJPEGThumbnail(imageBytes)
+}
+
+func decodeBase64Bytes(raw string) ([]byte, error) {
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\r', '\t', ' ':
+			return -1
+		default:
+			return r
+		}
+	}, raw)
+	if cleaned == "" {
+		return nil, fmt.Errorf("base64 payload is empty")
+	}
+
+	decoders := []func(string) ([]byte, error){
+		base64.StdEncoding.DecodeString,
+		base64.RawStdEncoding.DecodeString,
+		base64.URLEncoding.DecodeString,
+		base64.RawURLEncoding.DecodeString,
+	}
+
+	var lastErr error
+	for _, decode := range decoders {
+		data, err := decode(cleaned)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("invalid base64 image data: %w", lastErr)
 }
 
 func collectJSONLDImageCandidates(doc *goquery.Document) []string {

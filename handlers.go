@@ -2276,6 +2276,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 		Phone         string
 		Body          string
 		LinkPreview   bool
+		PreviewImage  string `json:"PreviewImage,omitempty"`
 		Id            string
 		ContextInfo   waE2E.ContextInfo
 		QuotedText    string         `json:"QuotedText,omitempty"`
@@ -2315,7 +2316,7 @@ func (s *server) SendMessage() http.HandlerFunc {
 		} else {
 			msgid = t.Id
 		}
-		previewData, err := buildTextLinkPreview(r.Context(), txtid, t.Body, t.LinkPreview)
+		previewData, err := buildTextLinkPreview(r.Context(), txtid, t.Body, t.LinkPreview, t.PreviewImage)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return

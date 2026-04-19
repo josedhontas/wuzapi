@@ -2446,6 +2446,10 @@ definitions:
         type: boolean
         description: "Set to true to enable link preview generation (default is false)"
         example: true
+      PreviewImage:
+        type: string
+        description: "Optional preview image in data URL or raw base64. Requires a URL in Body."
+        example: "data:image/jpeg;base64,/9j/4AAQSk..."
       Id:
         type: string
         example: "ABCDABCD1234"
