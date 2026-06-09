@@ -1313,7 +1313,12 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		uploaded, err = clientManager.GetWhatsmeowClient(txtid).Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		client := clientManager.GetWhatsmeowClient(txtid)
+		if recipient.Server == types.NewsletterServer {
+			uploaded, err = client.UploadNewsletter(context.Background(), filedata, whatsmeow.MediaImage)
+		} else {
+			uploaded, err = client.Upload(context.Background(), filedata, whatsmeow.MediaImage)
+		}
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload file: %v", err)))
 			return
@@ -1335,22 +1340,26 @@ func (s *server) SendImage() http.HandlerFunc {
 			return
 		}
 
-		msg := &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+		imageMessage := &waE2E.ImageMessage{
 			Caption:    proto.String(t.Caption),
 			URL:        proto.String(uploaded.URL),
 			DirectPath: proto.String(uploaded.DirectPath),
-			MediaKey:   uploaded.MediaKey,
 			Mimetype: proto.String(func() string {
 				if t.MimeType != "" {
 					return t.MimeType
 				}
 				return http.DetectContentType(filedata)
 			}()),
-			FileEncSHA256: uploaded.FileEncSHA256,
 			FileSHA256:    uploaded.FileSHA256,
 			FileLength:    proto.Uint64(uint64(len(filedata))),
 			JPEGThumbnail: thumbnailBytes,
-		}}
+		}
+		if recipient.Server != types.NewsletterServer {
+			imageMessage.MediaKey = uploaded.MediaKey
+			imageMessage.FileEncSHA256 = uploaded.FileEncSHA256
+		}
+
+		msg := &waE2E.Message{ImageMessage: imageMessage}
 
 		if t.ContextInfo.StanzaID != nil {
 			var qm *waE2E.Message
@@ -1386,7 +1395,11 @@ func (s *server) SendImage() http.HandlerFunc {
 			msg.ImageMessage.ContextInfo.IsForwarded = proto.Bool(true)
 		}
 
-		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		sendExtra := whatsmeow.SendRequestExtra{ID: types.MessageID(msgid)}
+		if recipient.Server == types.NewsletterServer {
+			sendExtra.MediaHandle = uploaded.Handle
+		}
+		resp, err = client.SendMessage(context.Background(), recipient, msg, sendExtra)
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("Error sending message: %v", err)))
 			return
