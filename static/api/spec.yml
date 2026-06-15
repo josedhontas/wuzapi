@@ -1076,6 +1076,28 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  /chat/send/linkpreview:
+    post:
+      tags:
+        - Chat
+      summary: Sends a text message with manual link preview
+      description: Sends a text message with caller-controlled link preview metadata. Phone, Body and Link are mandatory unless Body contains a URL, in which case Link can be omitted. Image can be a data:image base64 string or an http(s) image URL. If no Id is supplied, a random one will be generated. ContextInfo is optional and used when replying to a message.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageLinkPreview'
+
+      responses:
+        200:
+          description: Response
+          content:
+            application/json:
+              schema:
+                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
   /chat/send/edit:
     post:
       tags:
@@ -2716,6 +2738,49 @@ definitions:
         type: boolean
         description: "Set to true to enable link preview generation (default is false)"
         example: true
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+      QuotedText:
+        type: string
+        description: "Text content of the message being replied to (for displaying quote preview)"
+        example: "Original message text"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
+  MessageLinkPreview:
+    type: object
+    required:
+      - Phone
+      - Body
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Body:
+        type: string
+        example: "Check this https://example.com"
+      Link:
+        type: string
+        description: "URL shown in the link preview. If omitted, the first URL in Body is used."
+        example: "https://example.com"
+      Title:
+        type: string
+        description: "Custom preview title."
+        example: "My custom title"
+      Description:
+        type: string
+        description: "Custom preview description."
+        example: "My custom description"
+      Image:
+        type: string
+        description: "Preview image as data:image/...;base64,... or an http(s) image URL."
+        example: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."
+      Referer:
+        type: string
+        description: "Optional Referer header used when fetching Image from a URL."
+        example: "https://example.com"
       Id:
         type: string
         example: "ABCDABCD1234"
