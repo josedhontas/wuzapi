@@ -6577,6 +6577,7 @@ func (s *server) GetS3Config() http.HandlerFunc {
 				s3_retention_days as retention_days
 			FROM users WHERE id = $1`, txtid)
 
+		//oi
 		if err != nil {
 			log.Error().Err(err).Str("userID", txtid).Msg("Failed to get S3 configuration from database")
 			s.Respond(w, r, http.StatusInternalServerError, errors.New("failed to get S3 configuration"))
