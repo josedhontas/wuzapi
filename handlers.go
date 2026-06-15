@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/jpeg"
 	"net/http"
@@ -2771,16 +2770,31 @@ func linkPreviewThumbnailFromBytes(data []byte) ([]byte, uint32, uint32, error) 
 		return nil, 0, 0, err
 	}
 
-	thumb := resize.Thumbnail(manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight, img, resize.Lanczos3)
-	canvas := image.NewRGBA(image.Rect(0, 0, manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight))
-	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	srcBounds := img.Bounds()
+	srcWidth := srcBounds.Dx()
+	srcHeight := srcBounds.Dy()
+	if srcWidth <= 0 || srcHeight <= 0 {
+		return nil, 0, 0, fmt.Errorf("invalid image dimensions")
+	}
 
-	bounds := thumb.Bounds()
+	targetRatio := float64(manualLinkPreviewThumbnailWidth) / float64(manualLinkPreviewThumbnailHeight)
+	srcRatio := float64(srcWidth) / float64(srcHeight)
+
+	var resized image.Image
+	if srcRatio > targetRatio {
+		resized = resize.Resize(0, manualLinkPreviewThumbnailHeight, img, resize.Lanczos3)
+	} else {
+		resized = resize.Resize(manualLinkPreviewThumbnailWidth, 0, img, resize.Lanczos3)
+	}
+
+	canvas := image.NewRGBA(image.Rect(0, 0, manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight))
+
+	bounds := resized.Bounds()
 	offset := image.Pt(
 		(manualLinkPreviewThumbnailWidth-bounds.Dx())/2,
 		(manualLinkPreviewThumbnailHeight-bounds.Dy())/2,
 	)
-	draw.Draw(canvas, bounds.Add(offset), thumb, bounds.Min, draw.Over)
+	draw.Draw(canvas, canvas.Bounds(), resized, bounds.Min.Sub(offset), draw.Src)
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, canvas, &jpeg.Options{Quality: manualLinkPreviewJpegQuality}); err != nil {
