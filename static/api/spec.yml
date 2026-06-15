@@ -2716,6 +2716,10 @@ definitions:
         type: boolean
         description: "Set to true to enable link preview generation (default is false)"
         example: true
+      LinkPreviewImageOnly:
+        type: boolean
+        description: "When LinkPreview is true, omit the Open Graph title and description and send only the preview thumbnail when available"
+        example: true
       Id:
         type: string
         example: "ABCDABCD1234"

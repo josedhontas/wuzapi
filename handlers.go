@@ -2614,13 +2614,14 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 // Sends a regular text message
 func (s *server) SendMessage() http.HandlerFunc {
 	type textStruct struct {
-		Phone         string
-		Body          string
-		LinkPreview   bool
-		Id            string
-		ContextInfo   waE2E.ContextInfo
-		QuotedText    string         `json:"QuotedText,omitempty"`
-		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Phone                string
+		Body                 string
+		LinkPreview          bool
+		LinkPreviewImageOnly bool
+		Id                   string
+		ContextInfo          waE2E.ContextInfo
+		QuotedText           string         `json:"QuotedText,omitempty"`
+		QuotedMessage        *waE2E.Message `json:"QuotedMessage,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		txtid := r.Context().Value("userinfo").(Values).Get("Id")
@@ -2666,6 +2667,10 @@ func (s *server) SendMessage() http.HandlerFunc {
 			url = extractFirstURL(t.Body)
 			if url != "" {
 				title, description, imageData = getOpenGraphData(r.Context(), url, txtid)
+				if t.LinkPreviewImageOnly {
+					title = ""
+					description = ""
+				}
 			}
 		}
 		msg := &waE2E.Message{

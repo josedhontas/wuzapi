@@ -828,6 +828,11 @@ Example sending a new message with link preview
 curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Phone":"5491155554444","Body":"Check my site? https://example.com", "Id": "90B2F8B13FAC8A9CF6B06E99C7834DC5","LinkPreview": true}' http://localhost:8080/chat/send/text
 ```
 
+Example sending a new message with image-only link preview
+```
+curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Phone":"5491155554444","Body":"Check my site? https://example.com", "LinkPreview": true, "LinkPreviewImageOnly": true}' http://localhost:8080/chat/send/text
+```
+
 Example replying to some message:
 
 ```
