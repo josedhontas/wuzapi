@@ -6570,7 +6570,7 @@ func (s *server) GetS3Config() http.HandlerFunc {
 		}
 
 		log.Debug().Str("userID", txtid).Bool("enabled", config.Enabled).Str("endpoint", config.Endpoint).Str("bucket", config.Bucket).Msg("Retrieved S3 configuration from database")
-
+		// teste
 		// Don't return secret key for security
 		config.AccessKey = "***" // Mask access key
 
