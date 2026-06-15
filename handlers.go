@@ -2896,6 +2896,9 @@ func (s *server) SendLinkPreviewMessage() http.HandlerFunc {
 		if t.Description != "" {
 			msg.ExtendedTextMessage.Description = proto.String(t.Description)
 		}
+		if thumbnailBytes != nil && t.Title == "" && t.Description == "" {
+			msg.ExtendedTextMessage.Title = proto.String("\u2060")
+		}
 		if thumbnailBytes != nil {
 			msg.ExtendedTextMessage.ThumbnailWidth = proto.Uint32(thumbnailWidth)
 			msg.ExtendedTextMessage.ThumbnailHeight = proto.Uint32(thumbnailHeight)
