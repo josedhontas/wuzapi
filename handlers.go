@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"image/jpeg"
 	"net/http"
 	"net/url"
@@ -2758,9 +2760,9 @@ func linkPreviewHumanHeaders(referer string) map[string]string {
 }
 
 const (
-	manualLinkPreviewThumbnailWidth  = 640
-	manualLinkPreviewThumbnailHeight = 360
-	manualLinkPreviewJpegQuality     = 85
+	manualLinkPreviewThumbnailWidth  = 1200
+	manualLinkPreviewThumbnailHeight = 630
+	manualLinkPreviewJpegQuality     = 82
 )
 
 func linkPreviewThumbnailFromBytes(data []byte) ([]byte, uint32, uint32, error) {
@@ -2770,13 +2772,22 @@ func linkPreviewThumbnailFromBytes(data []byte) ([]byte, uint32, uint32, error) 
 	}
 
 	thumb := resize.Thumbnail(manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight, img, resize.Lanczos3)
+	canvas := image.NewRGBA(image.Rect(0, 0, manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+
+	bounds := thumb.Bounds()
+	offset := image.Pt(
+		(manualLinkPreviewThumbnailWidth-bounds.Dx())/2,
+		(manualLinkPreviewThumbnailHeight-bounds.Dy())/2,
+	)
+	draw.Draw(canvas, bounds.Add(offset), thumb, bounds.Min, draw.Over)
+
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: manualLinkPreviewJpegQuality}); err != nil {
+	if err := jpeg.Encode(&buf, canvas, &jpeg.Options{Quality: manualLinkPreviewJpegQuality}); err != nil {
 		return nil, 0, 0, err
 	}
 
-	bounds := thumb.Bounds()
-	return buf.Bytes(), uint32(bounds.Dx()), uint32(bounds.Dy()), nil
+	return buf.Bytes(), manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight, nil
 }
 
 func decodeManualLinkPreviewImage(ctx context.Context, imageValue, referer string) ([]byte, uint32, uint32, error) {
@@ -2898,10 +2909,21 @@ func (s *server) SendLinkPreviewMessage() http.HandlerFunc {
 		}
 		if thumbnailBytes != nil && t.Title == "" && t.Description == "" {
 			msg.ExtendedTextMessage.Title = proto.String("\u2060")
+			msg.ExtendedTextMessage.Description = proto.String("\u2060")
 		}
 		if thumbnailBytes != nil {
+			uploaded, err := clientManager.GetWhatsmeowClient(txtid).Upload(r.Context(), thumbnailBytes, whatsmeow.MediaLinkThumbnail)
+			if err != nil {
+				s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to upload link preview thumbnail: %v", err)))
+				return
+			}
 			msg.ExtendedTextMessage.ThumbnailWidth = proto.Uint32(thumbnailWidth)
 			msg.ExtendedTextMessage.ThumbnailHeight = proto.Uint32(thumbnailHeight)
+			msg.ExtendedTextMessage.ThumbnailDirectPath = proto.String(uploaded.DirectPath)
+			msg.ExtendedTextMessage.ThumbnailSHA256 = uploaded.FileSHA256
+			msg.ExtendedTextMessage.ThumbnailEncSHA256 = uploaded.FileEncSHA256
+			msg.ExtendedTextMessage.MediaKey = uploaded.MediaKey
+			msg.ExtendedTextMessage.MediaKeyTimestamp = proto.Int64(time.Now().Unix())
 		}
 		if t.ContextInfo.StanzaID != nil {
 			var qm *waE2E.Message
