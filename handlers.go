@@ -2757,15 +2757,21 @@ func linkPreviewHumanHeaders(referer string) map[string]string {
 	return headers
 }
 
+const (
+	manualLinkPreviewThumbnailWidth  = 640
+	manualLinkPreviewThumbnailHeight = 360
+	manualLinkPreviewJpegQuality     = 85
+)
+
 func linkPreviewThumbnailFromBytes(data []byte) ([]byte, uint32, uint32, error) {
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, 0, err
 	}
 
-	thumb := resize.Thumbnail(openGraphThumbnailWidth, openGraphThumbnailHeight, img, resize.Lanczos3)
+	thumb := resize.Thumbnail(manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight, img, resize.Lanczos3)
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: openGraphJpegQuality}); err != nil {
+	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: manualLinkPreviewJpegQuality}); err != nil {
 		return nil, 0, 0, err
 	}
 
