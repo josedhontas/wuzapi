@@ -2880,11 +2880,15 @@ func (s *server) SendLinkPreviewMessage() http.HandlerFunc {
 			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 				Text:          proto.String(t.Body),
 				MatchedText:   proto.String(t.Link),
-				Title:         proto.String(t.Title),
-				Description:   proto.String(t.Description),
 				JPEGThumbnail: thumbnailBytes,
 				PreviewType:   &previewType,
 			},
+		}
+		if t.Title != "" {
+			msg.ExtendedTextMessage.Title = proto.String(t.Title)
+		}
+		if t.Description != "" {
+			msg.ExtendedTextMessage.Description = proto.String(t.Description)
 		}
 		if thumbnailBytes != nil {
 			msg.ExtendedTextMessage.ThumbnailWidth = proto.Uint32(thumbnailWidth)
