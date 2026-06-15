@@ -850,6 +850,30 @@ Response:
 
 ---
 
+## Send Manual Link Preview Message
+
+Sends a text message or reply with caller-controlled link preview metadata. It accepts the same reply, mention, forwarded and Id fields as `/chat/send/text`, plus manual preview fields.
+
+Endpoint: _/chat/send/linkpreview_
+
+Method: **POST**
+
+Fields:
+
+- `Link`: URL to show in the preview. If omitted, the first URL in `Body` is used.
+- `Title`: preview title.
+- `Description`: preview description.
+- `Image`: preview image as `data:image/...;base64,...` or an http(s) image URL.
+- `Referer`: optional referer used when fetching `Image` from a URL.
+
+Example:
+
+```
+curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Phone":"5491155554444","Body":"Check this https://example.com","Link":"https://example.com","Title":"My custom title","Description":"My custom description","Image":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."}' http://localhost:8080/chat/send/linkpreview
+```
+
+---
+
 ## Send Template Message
 
 Sends a template message or reply. Template messages can contain call to action buttons: up to three quick replies, call button, and link button.

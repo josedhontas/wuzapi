@@ -104,6 +104,7 @@ func (s *server) routes() {
 	s.router.Handle("/session/hmac/config", c.Then(s.DeleteHmacConfig())).Methods("DELETE")
 
 	s.router.Handle("/chat/send/text", c.Then(s.SendMessage())).Methods("POST")
+	s.router.Handle("/chat/send/linkpreview", c.Then(s.SendLinkPreviewMessage())).Methods("POST")
 	s.router.Handle("/chat/delete", c.Then(s.DeleteMessage())).Methods("POST")
 	s.router.Handle("/chat/send/image", c.Then(s.SendImage())).Methods("POST")
 	s.router.Handle("/chat/send/audio", c.Then(s.SendAudio())).Methods("POST")

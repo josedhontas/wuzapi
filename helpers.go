@@ -174,6 +174,43 @@ func fetchURLBytes(ctx context.Context, resourceURL string, limit int64) ([]byte
 	return data, contentType, nil
 }
 
+func fetchURLBytesWithHeaders(ctx context.Context, resourceURL string, limit int64, headers map[string]string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", resourceURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := globalHTTPClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	}
+
+	lr := io.LimitReader(resp.Body, limit+1)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(data)) > limit {
+		return nil, "", fmt.Errorf("response exceeds allowed size (%d bytes)", limit)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+
+	return data, contentType, nil
+}
+
 func getOpenGraphData(ctx context.Context, urlStr string, userID string) (title, description string, imageData []byte) {
 	// Check cache first
 	if cachedData, found := openGraphCache.Get(urlStr); found {

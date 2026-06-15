@@ -2739,6 +2739,224 @@ func (s *server) SendMessage() http.HandlerFunc {
 	}
 }
 
+func linkPreviewHumanHeaders(referer string) map[string]string {
+	headers := map[string]string{
+		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+		"Accept":                    "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+		"Accept-Language":           "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+		"Cache-Control":             "no-cache",
+		"Pragma":                    "no-cache",
+		"Sec-Fetch-Dest":            "image",
+		"Sec-Fetch-Mode":            "no-cors",
+		"Sec-Fetch-Site":            "cross-site",
+		"Upgrade-Insecure-Requests": "1",
+	}
+	if referer != "" {
+		headers["Referer"] = referer
+	}
+	return headers
+}
+
+func linkPreviewThumbnailFromBytes(data []byte) ([]byte, uint32, uint32, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+
+	thumb := resize.Thumbnail(openGraphThumbnailWidth, openGraphThumbnailHeight, img, resize.Lanczos3)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: openGraphJpegQuality}); err != nil {
+		return nil, 0, 0, err
+	}
+
+	bounds := thumb.Bounds()
+	return buf.Bytes(), uint32(bounds.Dx()), uint32(bounds.Dy()), nil
+}
+
+func decodeManualLinkPreviewImage(ctx context.Context, imageValue, referer string) ([]byte, uint32, uint32, error) {
+	if imageValue == "" {
+		return nil, 0, 0, nil
+	}
+
+	var imageBytes []byte
+	switch {
+	case strings.HasPrefix(imageValue, "data:image"):
+		decoded, err := dataurl.DecodeString(imageValue)
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("could not decode base64 encoded preview image")
+		}
+		imageBytes = decoded.Data
+	case isHTTPURL(imageValue):
+		data, contentType, err := fetchURLBytesWithHeaders(ctx, imageValue, openGraphImageMaxBytes, linkPreviewHumanHeaders(referer))
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("failed to fetch preview image from url: %w", err)
+		}
+		if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+			return nil, 0, 0, fmt.Errorf("preview image url did not return an image content type")
+		}
+		imageBytes = data
+	default:
+		return nil, 0, 0, fmt.Errorf("preview image should be a data:image base64 string or http(s) url")
+	}
+
+	thumbnail, width, height, err := linkPreviewThumbnailFromBytes(imageBytes)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("could not prepare preview thumbnail: %w", err)
+	}
+	return thumbnail, width, height, nil
+}
+
+// Sends a text message with caller-controlled link preview metadata.
+func (s *server) SendLinkPreviewMessage() http.HandlerFunc {
+	type textStruct struct {
+		Phone         string
+		Body          string
+		Id            string
+		ContextInfo   waE2E.ContextInfo
+		QuotedText    string         `json:"QuotedText,omitempty"`
+		QuotedMessage *waE2E.Message `json:"QuotedMessage,omitempty"`
+		Link          string
+		Title         string
+		Description   string
+		Image         string
+		Referer       string
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		txtid := r.Context().Value("userinfo").(Values).Get("Id")
+		if clientManager.GetWhatsmeowClient(txtid) == nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New("no session"))
+			return
+		}
+
+		msgid := ""
+		var resp whatsmeow.SendResponse
+		decoder := json.NewDecoder(r.Body)
+		var t textStruct
+		err := decoder.Decode(&t)
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("could not decode Payload"))
+			return
+		}
+		if t.Phone == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Phone in Payload"))
+			return
+		}
+		if t.Body == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Body in Payload"))
+			return
+		}
+		if t.Link == "" {
+			t.Link = extractFirstURL(t.Body)
+		}
+		if t.Link == "" {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("missing Link in Payload and Body has no URL"))
+			return
+		}
+		if !isHTTPURL(t.Link) {
+			s.Respond(w, r, http.StatusBadRequest, errors.New("Link should be a valid http(s) URL"))
+			return
+		}
+
+		recipient, err := validateMessageFields(t.Phone, t.ContextInfo.StanzaID, t.ContextInfo.Participant)
+		if err != nil {
+			log.Error().Msg(fmt.Sprintf("%s", err))
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+		if t.Id == "" {
+			msgid = clientManager.GetWhatsmeowClient(txtid).GenerateMessageID()
+		} else {
+			msgid = t.Id
+		}
+
+		thumbnailBytes, thumbnailWidth, thumbnailHeight, err := decodeManualLinkPreviewImage(r.Context(), t.Image, firstNonEmpty(t.Referer, t.Link))
+		if err != nil {
+			s.Respond(w, r, http.StatusBadRequest, err)
+			return
+		}
+
+		previewType := waE2E.ExtendedTextMessage_IMAGE
+		msg := &waE2E.Message{
+			ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+				Text:          proto.String(t.Body),
+				MatchedText:   proto.String(t.Link),
+				Title:         proto.String(t.Title),
+				Description:   proto.String(t.Description),
+				JPEGThumbnail: thumbnailBytes,
+				PreviewType:   &previewType,
+			},
+		}
+		if thumbnailBytes != nil {
+			msg.ExtendedTextMessage.ThumbnailWidth = proto.Uint32(thumbnailWidth)
+			msg.ExtendedTextMessage.ThumbnailHeight = proto.Uint32(thumbnailHeight)
+		}
+		if t.ContextInfo.StanzaID != nil {
+			var qm *waE2E.Message
+			if t.QuotedMessage != nil {
+				qm = t.QuotedMessage
+			} else {
+				qm = &waE2E.Message{}
+				if t.QuotedText != "" {
+					qm.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
+						Text: proto.String(t.QuotedText),
+					}
+				} else {
+					qm.Conversation = proto.String("")
+				}
+			}
+			msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{
+				StanzaID:      proto.String(*t.ContextInfo.StanzaID),
+				Participant:   proto.String(*t.ContextInfo.Participant),
+				QuotedMessage: qm,
+			}
+		}
+		if t.ContextInfo.MentionedJID != nil {
+			if msg.ExtendedTextMessage.ContextInfo == nil {
+				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+			msg.ExtendedTextMessage.ContextInfo.MentionedJID = t.ContextInfo.MentionedJID
+		}
+		if t.ContextInfo.IsForwarded != nil && *t.ContextInfo.IsForwarded {
+			if msg.ExtendedTextMessage.ContextInfo == nil {
+				msg.ExtendedTextMessage.ContextInfo = &waE2E.ContextInfo{}
+			}
+			msg.ExtendedTextMessage.ContextInfo.IsForwarded = proto.Bool(true)
+		}
+
+		resp, err = clientManager.GetWhatsmeowClient(txtid).SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: msgid})
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending message: %v", err)))
+			return
+		}
+		historyStr := r.Context().Value("userinfo").(Values).Get("History")
+		historyLimit, _ := strconv.Atoi(historyStr)
+		s.saveOutgoingMessageToHistory(txtid, recipient.String(), msgid, "text", t.Body, "", historyLimit)
+
+		token := r.Context().Value("userinfo").(Values).Get("Token")
+		userID := r.Context().Value("userinfo").(Values).Get("Id")
+		s.publishSentMessageEvent(token, userID, txtid, recipient, msgid, msg, resp.Timestamp)
+
+		log.Info().Str("timestamp", fmt.Sprintf("%v", resp.Timestamp)).Str("id", msgid).Str("link", t.Link).Msg("Manual link preview message sent")
+		response := map[string]interface{}{"Details": "Sent", "Timestamp": resp.Timestamp.Unix(), "Id": msgid}
+		responseJson, err := json.Marshal(response)
+		if err != nil {
+			s.Respond(w, r, http.StatusInternalServerError, err)
+		} else {
+			s.Respond(w, r, http.StatusOK, string(responseJson))
+		}
+		return
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (s *server) SendPoll() http.HandlerFunc {
 	type pollRequest struct {
 		Group   string   `json:"group"`   // The recipient's group id (120363313346913103@g.us)
