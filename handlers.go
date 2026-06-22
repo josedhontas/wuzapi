@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/jpeg"
 	"net/http"
@@ -2782,19 +2783,21 @@ func linkPreviewThumbnailFromBytes(data []byte) ([]byte, uint32, uint32, error) 
 
 	var resized image.Image
 	if srcRatio > targetRatio {
-		resized = resize.Resize(0, manualLinkPreviewThumbnailHeight, img, resize.Lanczos3)
-	} else {
 		resized = resize.Resize(manualLinkPreviewThumbnailWidth, 0, img, resize.Lanczos3)
+	} else {
+		resized = resize.Resize(0, manualLinkPreviewThumbnailHeight, img, resize.Lanczos3)
 	}
 
 	canvas := image.NewRGBA(image.Rect(0, 0, manualLinkPreviewThumbnailWidth, manualLinkPreviewThumbnailHeight))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
 
 	bounds := resized.Bounds()
 	offset := image.Pt(
 		(manualLinkPreviewThumbnailWidth-bounds.Dx())/2,
 		(manualLinkPreviewThumbnailHeight-bounds.Dy())/2,
 	)
-	draw.Draw(canvas, canvas.Bounds(), resized, bounds.Min.Sub(offset), draw.Src)
+	targetBounds := image.Rectangle{Min: offset, Max: offset.Add(bounds.Size())}
+	draw.Draw(canvas, targetBounds, resized, bounds.Min, draw.Src)
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, canvas, &jpeg.Options{Quality: manualLinkPreviewJpegQuality}); err != nil {
