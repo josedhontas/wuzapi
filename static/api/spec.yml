@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
   title: WUZAPI
-  description: "WUZAPI implements a multi user and multi device REST API for WhatsApp.\n\n<h2>Authentication</h2><ul><li>Standard Endpoints: Include the token header with a valid user token (matches tokens stored in the users database table).</li><li>Admin Endpoints: Use the Authorization header with the admin token (set in .env as WUZAPI_ADMIN_TOKEN).</li></ul><h2>Admin Setup:</h2>You can manage users and do some tests by using the builtin dashboard [here](/dashboard).<h3>Add a Sample User via API</h3>Run this command to create a test user:<pre><code>curl -X POST http://localhost:8080/admin/users \\ \n-H \"Authorization: $WUZAPI_ADMIN_TOKEN\" \\ \n-H \"Content-Type: application/json\" \\ \n-d '{\"name\": \"John\", \"token\": \"Z1234ABCCXD\"}' </code> </pre>\n\n<h2>Webhook Configuration</h2>To receive WhatsApp messages:<ul><li>Host your own server (to process incoming messages).</li><li>Set its URL as the webhook via the [webhook](#Webhook) API call.</li></ul><h2>Message destinations (Phone):</h2><ul><li>Accepts international phone digits (optional leading +), full phone JIDs (@s.whatsapp.net), LID JIDs (@lid), and group JIDs (@g.us) where the endpoint supports groups. Keep identifiers as strings and preserve the full chat JID when replying.</li><li>Bare numeric IDs use cached PN/LID mappings; unknown values retain the phone-number fallback. Use a full JID if ambiguous. Bare numbers cannot contain internal spaces or punctuation other than a single leading +.</li><li>Usernames and Cloud API BSUIDs are not supported destinations. The same rules apply to params.Phone in mapped stdio send methods. Endpoint-specific restrictions still apply.</li><li>A successful send response does not confirm delivery; track delivery/read events.</li></ul>"
+  description: "WUZAPI implements a multi user and multi device REST API for WhatsApp.\n\n<h2>Authentication</h2><ul><li>Standard Endpoints: Include the token header with a valid user token (matches tokens stored in the users database table).</li><li>Admin Endpoints: Use the Authorization header with the admin token (set in .env as WUZAPI_ADMIN_TOKEN).</li></ul><h2>Admin Setup:</h2>You can manage users and do some tests by using the builtin dashboard [here](/dashboard).<h3>Add a Sample User via API</h3>Run this command to create a test user:<pre><code>curl -X POST http://localhost:8080/admin/users \\ \n-H \"Authorization: $WUZAPI_ADMIN_TOKEN\" \\ \n-H \"Content-Type: application/json\" \\ \n-d '{\"name\": \"John\", \"token\": \"Z1234ABCCXD\"}' </code> </pre>\n\n<h2>Webhook Configuration</h2>To receive WhatsApp messages:<ul><li>Host your own server (to process incoming messages).</li><li>Set its URL as the webhook via the [webhook](#Webhook) API call.</li></ul><h2>Phone number format:</h2><ul><li>Required: Country code (e.g. <b>5491155553934</b> for Argentina</li><li>Do not prefix with a plus sign (+), as natively whatsapp requires no plus sign prefix.</li></ul>"
   version: '3.0.0'
   termsOfService: ''
    
@@ -13,100 +13,6 @@ servers:
     description: Current host
 
 paths:
-  /chat/conversations:
-    get:
-      tags: [Chat]
-      summary: List the current user's stored conversations
-      description: Tenant-scoped latest-message summaries. Requires enabled history (501 otherwise). No-store response. Also available in stdio as chat.conversations.
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - in: query
-          name: limit
-          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
-        - in: query
-          name: offset
-          schema: {type: integer, minimum: 0, default: 0}
-      responses:
-        '200':
-          description: data contains chats, has_more and next_offset. Each chat has chat_jid, message_id, sender_jid, timestamp, message_type and text_content.
-        '400':
-          description: Invalid pagination
-        '401':
-          description: Invalid user token
-        '501':
-          description: History disabled
-  /chat/messages:
-    get:
-      tags: [Chat]
-      summary: Read a cursor-paginated page of stored messages
-      description: Tenant-scoped history sorted by timestamp and row ID descending. Does not request phone-side history recovery. Also available in stdio as chat.messages. No-store response.
-      security:
-        - ApiKeyAuth: []
-      parameters:
-        - in: query
-          name: chat_jid
-          required: true
-          schema: {type: string, example: '777@lid'}
-        - in: query
-          name: limit
-          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
-        - in: query
-          name: before
-          description: next_before from the previous page; must belong to the current user and chat. Omit for newest messages.
-          schema: {type: integer, minimum: 1}
-      responses:
-        '200':
-          description: data contains messages (existing history format), has_more and next_before.
-        '400':
-          description: Invalid pagination or missing chat_jid
-        '401':
-          description: Invalid user token
-        '404':
-          description: Missing or pruned pagination anchor; refresh the chat
-        '501':
-          description: History disabled
-  /chat/send/voice:
-    post:
-      tags: [Chat]
-      summary: Convert and send a browser voice recording
-      description: HTTP-only multipart upload. Requires FFmpeg with libopus. Input is limited to 16 MiB; output is OGG/Opus, mono 48 kHz at 24 kbit/s, capped at five minutes. Conversion times out after 45 seconds. Existing JSON audio and stdio audio methods are unchanged.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [Phone, Audio]
-              properties:
-                Phone:
-                  type: string
-                  description: Destination phone digits or full WhatsApp JID, including @lid and supported group JIDs.
-                  example: '777@lid'
-                Audio:
-                  type: string
-                  format: binary
-                Seconds:
-                  type: integer
-                  minimum: 0
-                  maximum: 300
-                  description: Optional duration metadata for the recording
-                Id:
-                  type: string
-                  description: Optional message ID
-      responses:
-        '200':
-          description: Normal audio response with Details, Timestamp and Id in data
-        '400':
-          description: Invalid destination or malformed/oversized recording
-        '401':
-          description: Invalid user token
-        '422':
-          description: Audio conversion failed or FFmpeg/libopus unavailable
-        '500':
-          description: Session or send failure
   /health:
     get:
       tags:
@@ -288,7 +194,7 @@ paths:
       tags:
         - Admin
       summary: Delete a user from DB and S3, logout and disconnect from whatsapp and clear it up from memory
-      description: Stops the session, attempts remote logout, deletes safely identified credentials, and removes the user, history, memory state and local/S3 files. Ambiguous ownership returns 409 and retains the user and devices. File cleanup is best effort.
+      description: Deletes a user by their ID, including login out, disconnect and memory cleanup Also removes all user files from S3.
       security:
         - AdminAuth: []
       parameters:
@@ -306,197 +212,6 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"id":"4e4942c7dee1deef99ab8fd9f7350de5","jid":"","name":"mariano"},"details":"User instance removed completely","success":true}
-        409:
-          description: Ambiguous device ownership or session shutdown/deletion conflict. Only ambiguous_device_ownership enables dashboard recovery.
-          content:
-            application/json:
-              schema:
-                example: {"code":409,"success":false,"error_code":"ambiguous_device_ownership","error":"could not safely remove device credentials; user retained"}
-  /admin/users/{id}/preserve-devices:
-    delete:
-      tags:
-        - Admin
-      summary: Delete an instance while preserving all WhatsApp device credentials
-      description: |
-        Explicitly opts into preserving credentials. Stops the session without remote logout,
-        removes the user and history atomically, and cleans up memory and local/S3 files.
-        Never resolves, deletes or reassigns WhatsApp devices. Devices remain linked to the phone.
-        File cleanup is best effort. Orphaned credentials require separate cleanup.
-        A previous failed full deletion is not required. No request body is needed.
-        Stdio method admin.users.delete.preserve_devices accepts userId and adminToken.
-      security:
-        - AdminAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-          description: ID of the instance to remove
-      responses:
-        200:
-          description: Instance removed; all device credentials preserved
-          content:
-            application/json:
-              schema:
-                example: {"code":200,"success":true,"data":{"id":"INSTANCE_ID","name":"example","jid":"","devices_preserved":true},"details":"user instance removed; WhatsApp credentials preserved and devices remain linked to the phone"}
-        401:
-          description: Invalid or missing admin token
-        404:
-          description: User not found
-        409:
-          description: Session is still stopping or a deletion is already in progress; user retained
-        500:
-          description: Database error
-  /admin/proxy-pool:
-    get:
-      tags:
-        - Admin
-      summary: List proxy pool
-      description: Lists the proxies in the pool with their current number of assigned sessions. Proxy passwords are masked.
-      security:
-        - AdminAuth: []
-      responses:
-        200:
-          description: Proxy pool entries
-          content:
-            application/json:
-              schema:
-                example: {"code":200,"data":[{"id":"8b1171837e3035ecbe793409fb58baf2","label":"residential-1","proxy_url":"socks5://user:xxxxx@203.0.113.10:1080","max_devices":2,"enabled":true,"assigned_count":1}],"success":true}
-    post:
-      tags:
-        - Admin
-      summary: Add proxy to pool
-      description: |
-        Adds a proxy to the pool. Sessions that connect without a proxy are assigned the least-loaded enabled pool proxy with free capacity, and keep it on later connects.
-        If the pool has enabled proxies but all are full, /session/connect returns 503, or connects without a proxy when WUZAPI_PROXY_POOL_FALLBACK=direct.
-      security:
-        - AdminAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                label:
-                  type: string
-                  example: residential-1
-                proxy_url:
-                  type: string
-                  description: Proxy URL in format "http://host:port" or "socks5://user:pass@host:port"
-                  example: socks5://user:pass@203.0.113.10:1080
-                max_devices:
-                  type: integer
-                  description: Maximum number of sessions assigned to this proxy (default 1)
-                  example: 2
-                enabled:
-                  type: boolean
-                  description: Whether new sessions may be assigned to this proxy (default true)
-                  example: true
-              required:
-                - proxy_url
-      responses:
-        201:
-          description: Proxy added
-          content:
-            application/json:
-              schema:
-                example: {"code":201,"data":{"id":"8b1171837e3035ecbe793409fb58baf2","label":"residential-1","proxy_url":"socks5://user:xxxxx@203.0.113.10:1080","max_devices":2,"enabled":true,"assigned_count":0},"success":true}
-        409:
-          description: proxy_url already exists in the pool
-  /admin/proxy-pool/{id}:
-    put:
-      tags:
-        - Admin
-      summary: Edit proxy in pool
-      description: |
-        Updates a pool entry. All fields are optional. Disabling stops new assignments but keeps existing ones.
-        max_devices cannot be lower than the current assigned_count. Changing proxy_url also updates the sessions assigned to the entry.
-      security:
-        - AdminAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            example: 8b1171837e3035ecbe793409fb58baf2
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                label:
-                  type: string
-                proxy_url:
-                  type: string
-                max_devices:
-                  type: integer
-                enabled:
-                  type: boolean
-            example: {"max_devices":3,"enabled":false}
-      responses:
-        200:
-          description: Proxy updated
-        404:
-          description: Proxy pool entry not found
-        409:
-          description: Duplicate proxy_url, or max_devices lower than the assigned count
-    delete:
-      tags:
-        - Admin
-      summary: Delete proxy from pool
-      description: Deletes a pool entry. Returns 409 while sessions are still assigned to it.
-      security:
-        - AdminAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-            example: 8b1171837e3035ecbe793409fb58baf2
-      responses:
-        200:
-          description: Proxy deleted
-          content:
-            application/json:
-              schema:
-                example: {"code":200,"data":{"id":"8b1171837e3035ecbe793409fb58baf2"},"details":"proxy pool entry deleted successfully","success":true}
-        404:
-          description: Proxy pool entry not found
-        409:
-          description: Proxy is still assigned to sessions
-  /admin/users/{id}/proxy-pool/release:
-    post:
-      tags:
-        - Admin
-      summary: Release a user's pool proxy
-      description: Frees the pool slot held by a disconnected session and clears its proxy. Returns 409 while the session is starting, pairing, reconnecting, or shutting down; disconnect and wait for shutdown first. On its next connect the session is assigned a pool proxy again.
-      security:
-        - AdminAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: ID of the user
-          schema:
-            type: string
-            example: 4e4942c7dee1deef99ab8fd9f7350de5
-      responses:
-        200:
-          description: Assignment released
-          content:
-            application/json:
-              schema:
-                example: {"code":200,"data":{"id":"4e4942c7dee1deef99ab8fd9f7350de5","proxy_pool_id":"8b1171837e3035ecbe793409fb58baf2"},"details":"proxy pool assignment released","success":true}
-        400:
-          description: User has no proxy assigned from the pool
-        409:
-          description: Session is active or its proxy assignment changed concurrently
   /newsletter/list:
     get:
       tags:
@@ -512,107 +227,6 @@ paths:
             application/json:
               schema:
                 example: {"code": 200, "data": {"Newsletter": [{"id": "120363144038483540@newsletter", "state": {"type": "active" }, "thread_metadata": {"creation_time": "1688746895", "description": {"id": "1689653839450668", "text": "WhatsApp's official channel. Follow for our latest feature launches, updates, exclusive drops and more.", "update_time": "1689653839450668" }, "invite": "0029Va4K0PZ5a245NkngBA2M", "name": {"id": "1688746895480511", "text": "WhatsApp", "update_time": "1688746895480511" }, "picture": {"direct_path": "/v/t61.24694-24/416962407_970228831134395_8869146381947923973_n.jpg?ccb=11-4&oh=01_Q5AaIRyTfP806JEGJDm0XWU5E-D4LcA-Wj3csSwh1jJTVanC&oe=67D550F1&_nc_sid=5e03e0&_nc_cat=110", "id": "1707950960975554", "type": "IMAGE", "url": "" }, "preview": {"direct_path": "/v/t61.24694-24/416962407_970228831134395_8869146381947923973_n.jpg?stp=dst-jpg_s192x192_tt6&ccb=11-4&oh=01_Q5AaIawuPXJUw9grRFJZtAJEc6QNm0XpqJq4X1Ssi9xNI0Qf&oe=67D550F1&_nc_sid=5e03e0&_nc_cat=110", "id": "1707950960975554", "type": "PREVIEW", "url": "" }, "settings": {"reaction_codes": {"value": "ALL" } }, "subscribers_count": "0", "verification": "verified" }, "viewer_metadata": {"mute": "on", "role": "subscriber" } } ] }, "success": true }
-  /newsletter/join:
-    post:
-      tags:
-        - Newsletter
-      summary: Join a newsletter
-      description: Follows a WhatsApp channel. The channel JID must use the `@newsletter` server.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - NewsletterJID
-              properties:
-                NewsletterJID:
-                  type: string
-                  example: 120363144038483540@newsletter
-                  description: The WhatsApp channel JID.
-      responses:
-        200:
-          description: Newsletter joined
-          content:
-            application/json:
-              schema:
-                example: {"code": 200, "data": {"Details": "Newsletter joined successfully"}, "success": true}
-        400:
-          description: Invalid or missing newsletter JID
-        500:
-          description: No active session or WhatsApp rejected the operation
-  /newsletter/leave:
-    post:
-      tags:
-        - Newsletter
-      summary: Leave a newsletter
-      description: Unfollows a WhatsApp channel. The channel JID must use the `@newsletter` server.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - NewsletterJID
-              properties:
-                NewsletterJID:
-                  type: string
-                  example: 120363144038483540@newsletter
-                  description: The WhatsApp channel JID.
-      responses:
-        200:
-          description: Newsletter left
-          content:
-            application/json:
-              schema:
-                example: {"code": 200, "data": {"Details": "Newsletter left successfully"}, "success": true}
-        400:
-          description: Invalid or missing newsletter JID
-        500:
-          description: No active session or WhatsApp rejected the operation
-  /newsletter/mute:
-    post:
-      tags:
-        - Newsletter
-      summary: Change newsletter notification settings
-      description: Mutes or unmutes notifications for a WhatsApp channel. The channel JID must use the `@newsletter` server.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - NewsletterJID
-                - Mute
-              properties:
-                NewsletterJID:
-                  type: string
-                  example: 120363144038483540@newsletter
-                  description: The WhatsApp channel JID.
-                Mute:
-                  type: boolean
-                  example: true
-                  description: Set to true to mute notifications, false to unmute them.
-      responses:
-        200:
-          description: Newsletter notification setting changed
-          content:
-            application/json:
-              schema:
-                example: {"code": 200, "data": {"Details": "Newsletter mute status changed successfully"}, "success": true}
-        400:
-          description: Invalid or missing newsletter JID
-        500:
-          description: No active session or WhatsApp rejected the operation
   /webhook:
     get:
       tags:
@@ -724,7 +338,7 @@ paths:
       tags:
         - Session 
       summary: connects to WhatsApp servers
-      description: "Initiates connection to WhatsApp servers.\n\nIf there is no previous session created, it will generate a QR code that can be retrieved via the [qr](#/Session/get_session_qr) API call. Alternatively, the device may initiate passkey pairing instead of QR — in that case, a PasskeyRequest webhook will be sent with the challenge data.\n\nIf the optional Subscribe is supplied it will limit webhooks to the specified event types: Message,ReadReceipt,Presence,HistorySync,ChatPresence.\n\nIf no Subscribe is supplied it will subscribe to All events.\n\nIf Immediate is set to false, the action will wait for 10 seconds to retrieve actual connection status from whatsapp, otherwise it will return immediatly.\n\nWhen setting Immediate to true you should check for actual connection status after a few seconds via the [status](#/Session/get_session_status) API call as your connection might fail if the session was closed from another device.\n\nIf the session has no proxy and the admin proxy pool is in use, a pool proxy is assigned before connecting."
+      description: "Initiates connection to WhatsApp servers.\n\nIf there is no previous session created, it will generate a QR code that can be retrieved via the [qr](#/Session/get_session_qr) API call. Alternatively, the device may initiate passkey pairing instead of QR — in that case, a PasskeyRequest webhook will be sent with the challenge data.\n\nIf the optional Subscribe is supplied it will limit webhooks to the specified event types: Message,ReadReceipt,Presence,HistorySync,ChatPresence.\n\nIf no Subscribe is supplied it will subscribe to All events.\n\nIf Immediate is set to false, the action will wait for 10 seconds to retrieve actual connection status from whatsapp, otherwise it will return immediatly.\n\nWhen setting Immediate to true you should check for actual connection status after a few seconds via the [status](#/Session/get_session_status) API call as your connection might fail if the session was closed from another device."
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -742,8 +356,6 @@ paths:
             application/json:
               schema:
                 example: { "code": 200, "data": { "details": "Connected!", "events": "Message", "jid": "5491155555555.0:53@s.whatsapp.net", "webhook": "https://some.site/webhook?request=parameter" }, "success": true }
-        503:
-          description: Every enabled proxy in the admin proxy pool is at max_devices capacity (not returned when WUZAPI_PROXY_POOL_FALLBACK=direct)
   /session/disconnect:
     post:
       tags:
@@ -796,7 +408,7 @@ paths:
           content:
             application/json:
               schema:
-                example: { "code": 200, "data": { "connected": true, "loggedIn": true }, "success": true }
+                example: { "code": 200, "data": { "Connected": true, "LoggedIn": true }, "success": true }
   /session/pairphone:
     post:
       tags:
@@ -1027,39 +639,6 @@ paths:
         500:
           description: S3 connection test failed
   /session/history:
-    post:
-      tags:
-        - Session
-      summary: Configure message retention and pairing history
-      description: Save before starting pairing. No active WhatsApp session is required. Omitted fields retain their current values. Sync days affect the next new pairing, not an ordinary reconnect or a QR already issued. Zero preserves WhatsApp default sync behavior; it does not disable incoming HistorySync events.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              minProperties: 1
-              properties:
-                history:
-                  type: integer
-                  minimum: 0
-                  description: Local message retention count per chat, independent of sync days.
-                  example: 1000
-                days_to_sync_history:
-                  type: integer
-                  minimum: 0
-                  maximum: 365
-                  description: Requested full history window on next pairing. Availability is determined by WhatsApp and the phone.
-                  example: 30
-      responses:
-        '200':
-          description: Configuration saved
-        '400':
-          description: Missing settings or invalid values
-        '500':
-          description: Database error
     get:
       tags:
         - Session
@@ -1483,15 +1062,8 @@ paths:
     post:
       tags:
         - Chat 
-      summary: Deletes an own message or another participant's group message
-      description: >-
-        Omit SenderJID (or send an empty string) to delete your own message.
-        To delete another participant's message, use the group JID in Phone and
-        the original author's full PN or LID in SenderJID. The connected WhatsApp
-        account must be a group admin; WhatsApp enforces deletion permissions.
-        Providing your own PN or LID also deletes an own message and does not
-        require group admin privileges. Use the sender identity from the original
-        message event; PN and LID are not automatically interconverted.
+      summary: Deletes a message sent by user
+      description: Deletes a messages sent by the same user
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1507,11 +1079,7 @@ paths:
           content:
             application/json:
               schema:
-                example: { "code": 200, "data": { "Details": "Deleted", "Id": "AABBCC11223344", "Timestamp": 1700000000 }, "success": true }
-        400:
-          description: Missing fields, invalid SenderJID, or another sender outside a group
-        500:
-          description: No session or an error sending the revocation to WhatsApp
+                example: { "code": 200, "data": { "Details": "Message deleted" }, "success": true }
   /chat/markread:
     post:
       tags:
@@ -1561,7 +1129,7 @@ paths:
       tags:
         - Chat 
       summary: Sends a text message
-      description: Sends a text message. Phone and Body are mandatory. If no Id is supplied, a random one will be generated. ContextInfo is optional and used when repyling to some message. StanzaId is the message id we are replying to and participant who wrote that message. If sending a new message, ContextInfo can be ommited altogether. MentionAll=true or a standalone @everyone mentions all group members; visible text is preserved. Explicit ContextInfo.MentionedJID supports ghost mentions.
+      description: Sends a text message. Phone and Body are mandatory. If no Id is supplied, a random one will be generated. ContextInfo is optional and used when repyling to some message. StanzaId is the message id we are replying to and participant who wrote that message. If sending a new message, ContextInfo can be ommited altogether.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1578,12 +1146,34 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  /chat/send/linkpreview:
+    post:
+      tags:
+        - Chat
+      summary: Sends a text message with manual link preview
+      description: Sends a text message with caller-controlled link preview metadata. Phone, Body and Link are mandatory unless Body contains a URL, in which case Link can be omitted. Image can be a data:image base64 string or an http(s) image URL. If no Id is supplied, a random one will be generated. ContextInfo is optional and used when replying to a message.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageLinkPreview'
+
+      responses:
+        200:
+          description: Response
+          content:
+            application/json:
+              schema:
+                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
   /chat/send/edit:
     post:
       tags:
         - Chat
       summary: Edits a previously sent message
-      description: Edits a message already sent by the same user. Provide the message ID and new content. MentionAll=true or a standalone @everyone mentions all group members; visible text is preserved. Explicit ContextInfo.MentionedJID supports ghost mentions.
+      description: Edits a message already sent by the same user. Provide the message ID and new content.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1593,10 +1183,6 @@ paths:
             schema:
               type: object
               properties:
-                MentionAll:
-                  type: boolean
-                  default: false
-                  description: Mention all current group participants without visible phone numbers. A standalone @everyone also enables this; text is preserved. Direct chats are rejected and participant lookup failures abort sending.
                 Id:
                   type: string
                   description: The ID of the message to edit
@@ -1773,7 +1359,7 @@ paths:
       tags:
         - Chat 
       summary: Sends an image/picture message
-      description: Sends an image message (must be base64 encoded in image/png or image/jpeg formats) MentionAll=true or a standalone @everyone mentions all group members; visible text is preserved. Explicit ContextInfo.MentionedJID supports ghost mentions.
+      description: Sends an image message (must be base64 encoded in image/png or image/jpeg formats)
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1817,7 +1403,7 @@ paths:
       tags:
         - Chat 
       summary: Sends a document message
-      description: Sends any document (must be base64 encoded using application/octet-stream mime) MentionAll=true or a standalone @everyone mentions all group members; visible text is preserved. Explicit ContextInfo.MentionedJID supports ghost mentions.
+      description: Sends any document (must be base64 encoded using application/octet-stream mime)
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1861,7 +1447,7 @@ paths:
       tags:
         - Chat 
       summary: Sends a video message
-      description: Sends a video message (must be base64 encoded in video/mp4 or video/3gpp format. Only H.264 video codec and AAC audio codec is supported.) MentionAll=true or a standalone @everyone mentions all group members; visible text is preserved. Explicit ContextInfo.MentionedJID supports ghost mentions.
+      description: Sends a video message (must be base64 encoded in video/mp4 or video/3gpp format. Only H.264 video codec and AAC audio codec is supported.)
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -1965,66 +1551,6 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
-  /chat/send/carousel:
-    post:
-      tags:
-        - Chat
-      summary: Sends an image carousel
-      description: >-
-        Sends 2-10 ordered JPEG/PNG cards as one native interactive message to
-        a direct PN/LID chat. All cards are validated before upload. Total image
-        bytes are limited to 16 MiB and the JSON request to 24 MiB. Preparation
-        has a 45-second budget and dispatch a detached 60-second budget; internal
-        send-lock queueing can exceed the HTTP deadline. Acknowledgement does
-        not prove rendering. The pinned whatsmeow version loses interactive
-        AdditionalNodes on recipient retry receipts, so recovery is unverified.
-        Never automatically resend after an ambiguous dispatch error or timeout.
-        Replace sample image URLs with your own. See API.md for complete limits. Stdio method is chat.send.carousel;
-        its existing 512-KiB line limit favors image URLs.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/definitions/MessageCarousel'
-            example:
-              Phone: "15555550100"
-              Id: "carousel-example-1"
-              Body: "Choose a destination"
-              Cards:
-                - Body: "Summit"
-                  Image: "https://example.com/summit.jpg"
-                  Buttons:
-                    - type: reply
-                      title: "Choose"
-                      id: "summit"
-                - Body: "Coast"
-                  Image: "https://example.com/coast.png"
-                  Buttons:
-                    - type: cta_url
-                      title: "Details"
-                      url: "https://example.com/coast"
-      responses:
-        200:
-          description: Transport acknowledged the message; does not prove display or reading
-          content:
-            application/json:
-              schema:
-                example: {"code":200,"data":{"Details":"Sent","Id":"carousel-example-1","Timestamp":1700000000},"success":true}
-        400:
-          description: Invalid recipient, cards, actions or images
-        401:
-          description: Invalid user token
-        413:
-          description: JSON body exceeds 24 MiB
-        500:
-          description: Session unavailable, preparation/upload failure (not sent), or ambiguous dispatch; see error message
-        503:
-          description: Preparation canceled; message not sent
-        504:
-          description: Preparation deadline exceeded; message not sent
   /chat/send/list:
     post:
       tags:
@@ -2204,23 +1730,7 @@ paths:
       tags:
         - Chat
       summary: Get chat message history
-      description: |
-        Retrieves message history for a specific chat, newest first. Requires history to be enabled.
-        History contains events, not a materialized view of the latest message contents.
-        An edit is a separate row with message_type `edit`, its own message_id, the target
-        message ID in quoted_message_id, and replacement text or caption in text_content
-        (which can be empty). The original row is not modified. Consumers must apply edits
-        to their targets, using protocolMessage.timestampMS in datajson for edit ordering
-        when available. Database timestamps represent insertion time, including for HistorySync;
-        sent_at holds the send time WhatsApp reported, when known.
-        A limited result may contain an edit without its original message.
-        Reactions, edits and deletes sent through the API are stored like received ones, with
-        sender_jid `me` and the send's own message_id. Reactions keep the target in quoted_message_id
-        (a removed reaction sent through the API has an empty text_content); deletes keep it in text_content.
-        Newsletter edits and deletes use a generated local history message_id because WhatsApp
-        reuses the target ID. Target fields and endpoint responses are unchanged.
-        Live and HistorySync edits use the same fields. Legacy unknown rows are repaired
-        when the same edit is redelivered; existing rows are not scanned or backfilled.
+      description: Retrieves message history for a specific chat. Returns messages in reverse chronological order (newest first). Requires message history to be enabled on the server.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -2269,7 +1779,6 @@ paths:
                       sender_jid: "5491155554444@s.whatsapp.net"
                       message_id: "3EB0C767D26A1B5F7C83"
                       timestamp: "2023-12-01T15:30:00Z"
-                      sent_at: "2023-12-01T15:29:58Z"
                       message_type: "text"
                       text_content: "Hello, how are you?"
                       media_link: ""
@@ -2398,27 +1907,6 @@ paths:
             application/json:
               schema:
                 example: { "code": 200, "data": { "Details": "Group locked setting updated successfully" }, "success": true }
-  /group/memberaddmode:
-    post:
-      tags:
-        - Group
-      summary: Set group member add mode
-      description: Configures who can add participants to the group, only admins (admin_add) or any participant (all_member_add).
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/definitions/GroupMemberAddMode'
-      responses:
-        200:
-          description: Success
-          content:
-            application/json:
-              schema:
-                example: { "code": 200, "data": { "Details": "Group member add mode updated successfully" }, "success": true }
   /group/ephemeral:
     post:
       tags:
@@ -2761,608 +2249,6 @@ paths:
               schema:
                 example: { "code": 200, "data": { "Details": "Group join approval mode updated successfully" }, "success": true }
 
-  /chat/markplayed:
-    post:
-      tags:
-      - Chat
-      summary: Mark incoming audio as played
-      description: 'Sends played receipts, without playing or verifying media locally.
-        All IDs must belong to the supplied chat and sender. Legacy Chat/Sender JID
-        objects are also accepted. Stdio method: chat.markplayed.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                ChatPhone: &id001
-                  type: string
-                  description: Individual PN/LID or group JID.
-                  example: 123@g.us
-                SenderPhone:
-                  type: string
-                  description: 'Required for groups: original sender PN/LID JID.'
-                Id:
-                  type: array
-                  minItems: 1
-                  items:
-                    type: string
-              required:
-              - ChatPhone
-              - Id
-            example:
-              ChatPhone: 123@g.us
-              SenderPhone: 456@lid
-              Id:
-              - MESSAGE_ID
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /chat/star:
-    post:
-      tags:
-      - Chat
-      summary: Star or unstar a message
-      description: 'Use the original author and exact message ID. Set Star to false
-        to unstar. Stdio method: chat.star.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                Sender:
-                  type: string
-                  description: Required for groups; defaults to Chat for direct conversations.
-                Id:
-                  type: string
-                  minLength: 1
-                FromMe: &id002
-                  type: boolean
-                  description: Must be explicitly supplied.
-                Star: *id002
-              required:
-              - Chat
-              - Id
-              - FromMe
-              - Star
-            example:
-              Chat: 123@g.us
-              Sender: 456@lid
-              Id: MESSAGE_ID
-              FromMe: false
-              Star: true
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /chat/pinchat:
-    post:
-      tags:
-      - Chat
-      summary: Pin or unpin a conversation
-      description: 'Pins a conversation in the chat list; /chat/pin pins an individual
-        message. WhatsApp pin limits apply. Stdio method: chat.pinchat.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                Pin: *id002
-              required:
-              - Chat
-              - Pin
-            example:
-              Chat: 123@g.us
-              Pin: true
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /chat/mute:
-    post:
-      tags:
-      - Chat
-      summary: Mute or unmute a conversation
-      description: 'Updates WhatsApp conversation settings; does not suppress WuzAPI
-        webhooks. Stdio method: chat.mute. Unknown fields and trailing JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                Mute: *id002
-                DurationSeconds:
-                  type: integer
-                  format: int64
-                  minimum: 0
-                  maximum: 9223372036
-                  description: Zero or omitted means indefinitely. Must be zero/omitted
-                    when unmuting.
-              required:
-              - Chat
-              - Mute
-              additionalProperties: false
-            example:
-              Chat: 123@g.us
-              Mute: true
-              DurationSeconds: 3600
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /chat/unread:
-    post:
-      tags:
-      - Chat
-      summary: Set conversation unread flag
-      description: 'False clears the flag. Changes conversation state, not message read
-        receipts; use /chat/markread for receipts. Stdio method: chat.unread. Unknown
-        fields and trailing JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                Unread: *id002
-              required:
-              - Chat
-              - Unread
-              additionalProperties: false
-            example:
-              Chat: 123@g.us
-              Unread: true
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /labels/edit:
-    post:
-      tags:
-      - Labels
-      summary: Create, edit or delete a label
-      description: 'Deleted=true deletes. Otherwise Name and Color are required. Caller
-        chooses an unused ID for creation. WhatsApp account/client support applies,
-        especially Business accounts. No local catalog or listing is provided. Stdio
-        method: labels.edit. Unknown fields and trailing JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                LabelID: &id003
-                  type: string
-                  pattern: ^(0|[1-9][0-9]*)$
-                  description: Canonical unsigned 32-bit decimal ID. Caller manages
-                    IDs.
-                  example: '7'
-                Name:
-                  type: string
-                  minLength: 1
-                  maxLength: 100
-                  description: Nonblank; required unless deleting.
-                Color:
-                  type: integer
-                  minimum: 0
-                  maximum: 19
-                  description: Required unless deleting.
-                Deleted: *id002
-              required:
-              - LabelID
-              - Deleted
-              additionalProperties: false
-            example:
-              LabelID: '7'
-              Name: Customer
-              Color: 3
-              Deleted: false
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /labels/chat:
-    post:
-      tags:
-      - Labels
-      summary: Assign or remove a chat label
-      description: 'Use Labeled=false to remove. Applications retain label IDs; no local
-        catalog is maintained. Stdio method: labels.chat. Unknown fields and trailing
-        JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                LabelID: *id003
-                Labeled: *id002
-              required:
-              - Chat
-              - LabelID
-              - Labeled
-              additionalProperties: false
-            example:
-              Chat: 123@g.us
-              LabelID: '7'
-              Labeled: true
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /labels/message:
-    post:
-      tags:
-      - Labels
-      summary: Assign or remove a message label
-      description: 'Uses the original message ID. Labeled=false removes the association.
-        No local catalog is maintained. Stdio method: labels.message. Unknown fields
-        and trailing JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                LabelID: *id003
-                Id:
-                  type: string
-                  minLength: 1
-                Labeled: *id002
-              required:
-              - Chat
-              - LabelID
-              - Id
-              - Labeled
-              additionalProperties: false
-            example:
-              Chat: 123@g.us
-              LabelID: '7'
-              Id: MESSAGE_ID
-              Labeled: true
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /chat/poll/vote:
-    post:
-      tags:
-      - Chat
-      summary: Vote in a poll or retract a vote
-      description: 'FromMe describes the poll creator. Preserve original PN/LID metadata.
-        Requires the original message secret in this session store; missing secrets
-        abort before sending. Caller enforces available options and selection limit.
-        Failed sends are not automatically replayed. Stdio method: chat.poll.vote. Unknown
-        fields and trailing JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Chat: *id001
-                Sender:
-                  type: string
-                  description: Original poll creator PN/LID JID, required even for direct
-                    chats.
-                Id:
-                  type: string
-                  minLength: 1
-                  description: Original poll message ID.
-                FromMe: *id002
-                Options:
-                  type: array
-                  uniqueItems: true
-                  items:
-                    type: string
-                    minLength: 1
-                  description: Exact distinct nonblank option names. Empty array retracts
-                    the vote; null is invalid.
-              required:
-              - Chat
-              - Sender
-              - Id
-              - FromMe
-              - Options
-              additionalProperties: false
-            example:
-              Chat: 123@g.us
-              Sender: 456@lid
-              Id: POLL_MESSAGE_ID
-              FromMe: false
-              Options:
-              - 'Yes'
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      Details:
-                        type: string
-                        example: Sent
-                      Id:
-                        type: string
-                      Timestamp:
-                        type: integer
-                        format: int64
-                        description: Unix seconds.
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-  /user/business-profile:
-    post:
-      tags:
-      - User
-      summary: Look up a business profile
-      description: 'Uses the authenticated user session. Returned profile fields may
-        be empty. No local cache. A nil result returns 404; upstream errors, including
-        unavailable profiles, return 500. Stdio method: user.business-profile. Unknown
-        fields and trailing JSON are rejected.'
-      security:
-      - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                Phone:
-                  type: string
-                  description: International phone without +, PN JID, or LID JID. Groups/channels
-                    are rejected.
-                  example: '5491112345678'
-              required:
-              - Phone
-              additionalProperties: false
-            example:
-              Phone: '5491112345678'
-      responses:
-        '200':
-          description: Success in the standard WuzAPI envelope.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  code:
-                    type: integer
-                  success:
-                    type: boolean
-                  data:
-                    type: object
-                    properties:
-                      JID:
-                        type: string
-                      Address:
-                        type: string
-                      Email:
-                        type: string
-                      BusinessHoursTimeZone:
-                        type: string
-                      Categories:
-                        type: array
-                        items:
-                          type: object
-                      ProfileOptions:
-                        type: object
-                        additionalProperties:
-                          type: string
-                      BusinessHours:
-                        type: array
-                        items:
-                          type: object
-        '400':
-          description: Invalid payload.
-        '401':
-          description: Missing or invalid user token.
-        '500':
-          description: No session or upstream operation failed.
-        '404':
-          description: Business profile unavailable (nil result).
-
 definitions:
   ContextInfo:
     type: object
@@ -3461,14 +2347,6 @@ definitions:
             type: integer
             example: 30
 
-      days_to_sync_history:
-        type: integer
-        minimum: 0
-        maximum: 365
-        default: 0
-        example: 30
-        description: "History window requested in days on the next new pairing. 0 uses WhatsApp defaults. Configure before starting pairing; reconnecting an already linked device does not trigger a new full sync. Independent of local history retention."
-
   CreateUser:
     type: object
     required:
@@ -3548,14 +2426,6 @@ definitions:
         description: "Number of messages to store in history per chat for this user. 0 means no history is saved, any positive number enables history storage for that many messages per chat. Default is 0"
         default: 0
 
-      days_to_sync_history:
-        type: integer
-        minimum: 0
-        maximum: 365
-        default: 0
-        example: 30
-        description: "History window requested in days on the next new pairing. 0 uses WhatsApp defaults. Configure before starting pairing; reconnecting an already linked device does not trigger a new full sync. Independent of local history retention."
-
   DeleteUser:
     type: object
     properties:
@@ -3588,13 +2458,8 @@ definitions:
       timestamp:
         type: string
         format: date-time
-        description: "When the row was stored. HistorySync messages are stored at sync time, so use sent_at for the send time"
+        description: "Timestamp when the message was sent/received"
         example: "2023-12-01T15:30:00Z"
-      sent_at:
-        type: string
-        format: date-time
-        description: "When the message was sent, as reported by WhatsApp. Omitted when unknown, including rows stored before this field existed"
-        example: "2023-12-01T15:29:58Z"
       message_type:
         type: string
         description: "Type of message (text, image, audio, video, document, sticker, contact, location, etc.)"
@@ -3716,7 +2581,6 @@ definitions:
       - Vcard
     properties:
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Name:
@@ -3742,7 +2606,6 @@ definitions:
       - Longitude
     properties:
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Name:
@@ -3808,7 +2671,6 @@ definitions:
       - Desc
     properties:
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5521971532700"
       ButtonText:
@@ -3875,80 +2737,6 @@ definitions:
             type: string
             example: "5491155553935@s.whatsapp.net"
 
-  MessageCarousel:
-    type: object
-    additionalProperties: false
-    required: [Phone, Body, Cards]
-    properties:
-      Phone:
-        type: string
-        description: Bare phone number or direct PN/LID JID; no groups, bots or device-specific JIDs
-        example: "15555550100"
-      Id:
-        type: string
-        maxLength: 128
-        description: Optional printable ASCII without whitespace. Generated when omitted. Correlation only; reuse is not idempotency and does not replace history.
-        example: "carousel-example-1"
-      Body:
-        type: string
-        minLength: 1
-        maxLength: 1024
-        example: "Choose a destination"
-      Cards:
-        type: array
-        minItems: 2
-        maxItems: 10
-        items:
-          $ref: '#/definitions/CarouselCard'
-  CarouselCard:
-    type: object
-    additionalProperties: false
-    required: [Body, Image, Buttons]
-    properties:
-      Body:
-        type: string
-        minLength: 1
-        maxLength: 160
-        example: "Summit"
-      Image:
-        type: string
-        description: JPEG/PNG data URL or HTTP(S) URL. Images total at most 16 MiB, 4096px per side and 16 megapixels each.
-        example: "https://example.com/summit.jpg"
-      Buttons:
-        type: array
-        minItems: 1
-        maxItems: 3
-        items:
-          $ref: '#/definitions/CarouselButton'
-  CarouselButton:
-    type: object
-    additionalProperties: false
-    required: [title]
-    properties:
-      type:
-        type: string
-        enum: ["", reply, cta_url, cta_call]
-        default: reply
-        description: Omitted or empty type means reply.
-      title:
-        type: string
-        minLength: 1
-        maxLength: 20
-      id:
-        type: string
-        minLength: 1
-        maxLength: 200
-        description: Required for reply, without controls, unique across all cards. Omit for other actions.
-        example: "summit"
-      url:
-        type: string
-        maxLength: 2048
-        description: Required for cta_url; absolute HTTP(S), no credentials, whitespace or controls. Omit for other actions.
-        example: "https://example.com/summit"
-      phone_number:
-        type: string
-        description: Required for cta_call; optional leading + and 6-15 digits. Omit for other actions.
-        example: "+15555550100"
   MessageButtons:
     type: object
     required:
@@ -3957,7 +2745,6 @@ definitions:
       - Buttons
     properties:
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5521971532700"
       Body:
@@ -4019,12 +2806,7 @@ definitions:
       - Phone
       - Body
     properties:
-      MentionAll:
-        type: boolean
-        default: false
-        description: Mention all current group participants without visible phone numbers. A standalone @everyone also enables this; text is preserved. Direct chats are rejected and participant lookup failures abort sending.
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Body:
@@ -4045,18 +2827,56 @@ definitions:
         example: "Original message text"
       QuotedMessage:
         $ref: "#/definitions/QuotedMessage"
+  MessageLinkPreview:
+    type: object
+    required:
+      - Phone
+      - Body
+    properties:
+      Phone:
+        type: string
+        example: "5491155553935"
+      Body:
+        type: string
+        example: "Check this https://example.com"
+      Link:
+        type: string
+        description: "URL shown in the link preview. If omitted, the first URL in Body is used."
+        example: "https://example.com"
+      Title:
+        type: string
+        description: "Custom preview title."
+        example: "My custom title"
+      Description:
+        type: string
+        description: "Custom preview description."
+        example: "My custom description"
+      Image:
+        type: string
+        description: "Preview image as data:image/...;base64,... or an http(s) image URL."
+        example: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ..."
+      Referer:
+        type: string
+        description: "Optional Referer header used when fetching Image from a URL."
+        example: "https://example.com"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      ContextInfo:
+        $ref: "#/definitions/ContextInfo"
+      QuotedText:
+        type: string
+        description: "Text content of the message being replied to (for displaying quote preview)"
+        example: "Original message text"
+      QuotedMessage:
+        $ref: "#/definitions/QuotedMessage"
   MessageImage:
     type: object
     required: 
       - Phone
       - Image
     properties:
-      MentionAll:
-        type: boolean
-        default: false
-        description: Mention all current group participants without visible phone numbers. A standalone @everyone also enables this; text is preserved. Direct chats are rejected and participant lookup failures abort sending.
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Image:
@@ -4079,7 +2899,6 @@ definitions:
       - Audio
     properties:
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Audio:
@@ -4114,12 +2933,7 @@ definitions:
       - Phone
       - Video 
     properties:
-      MentionAll:
-        type: boolean
-        default: false
-        description: Mention all current group participants without visible phone numbers. A standalone @everyone also enables this; text is preserved. Direct chats are rejected and participant lookup failures abort sending.
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Video:
@@ -4145,7 +2959,6 @@ definitions:
       - Sticker
     properties:
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Sticker:
@@ -4186,12 +2999,7 @@ definitions:
       - Document 
       - FileName 
     properties:
-      MentionAll:
-        type: boolean
-        default: false
-        description: Mention all current group participants without visible phone numbers. A standalone @everyone also enables this; text is preserved. Direct chats are rejected and participant lookup failures abort sending.
       Phone:
-        description: "Destination phone digits (optional leading +) or full WhatsApp JID, including @lid; use @g.us for groups where supported. Bare numeric IDs use cached PN/LID mappings with a phone-number fallback. Usernames and BSUIDs are not supported. See the message destination rules above."
         type: string
         example: "5491155553935"
       Document:
@@ -4200,10 +3008,6 @@ definitions:
       FileName:
         type: string
         example: file.txt
-      MimeType:
-        type: string
-        description: Explicit document MIME override. If omitted, uses the declared data URL or HTTP type, then the filename extension, then content detection. Missing, invalid, and generic octet-stream source types fall back; an implicit data URL text/plain default is not a declaration.
-        example: "text/plain"
       Id:
         type: string
         example: "ABCDABCD1234"
@@ -4261,17 +3065,7 @@ definitions:
         example: "1234-abcd-21234"
       Phone:
         type: string
-        description: Destination chat; use the full group JID ending in @g.us for group messages.
-        example: "120363000000000000@g.us"
-      SenderJID:
-        type: string
-        description: >-
-          Optional original message author. Omit or leave empty for own messages.
-          Otherwise provide a numeric user JID ending in @s.whatsapp.net or @lid.
-          Legacy @c.us is normalized to @s.whatsapp.net. Device/agent suffixes are
-          validated and removed. Bare numbers, whitespace, multiple @ signs and
-          group, broadcast or newsletter JIDs are rejected with HTTP 400.
-        example: "5491155553935@s.whatsapp.net"
+        example: "5491155553934"
   Markread:
     type: object
     required:
@@ -4525,27 +3319,6 @@ definitions:
           type: string
           description: List of participant phone numbers (without country code prefix symbols)
         example: [ "5491112345678", "5491123456789" ]
-      MemberAddMode:
-        type: string
-        enum: [ "admin_add", "all_member_add" ]
-        description: Optional. Who can add participants to the new group. When omitted, whatsmeow's default applies (all_member_add).
-        example: "admin_add"
-
-  GroupMemberAddMode:
-    type: object
-    required:
-      - GroupJID
-      - Mode
-    properties:
-      GroupJID:
-        type: string
-        description: The JID of the group to configure
-        example: "120363312246943103@g.us"
-      Mode:
-        type: string
-        enum: [ "admin_add", "all_member_add" ]
-        description: admin_add to let only admins add participants, all_member_add to let any participant add them.
-        example: "admin_add"
 
   GroupLocked:
     type: object
