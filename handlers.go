@@ -2783,7 +2783,7 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 
 		msg := proto.String(t.Body)
 
-		err = clientManager.GetWhatsmeowClient(txtid).SetStatusMessage(context.Background(), *msg)
+		err = clientManager.GetWhatsmeowClient(txtid).SetStatusMessage(context.Background(), types.SetStatusInput{Text: msg})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending status message: %v", err)))
 			return
@@ -4124,9 +4124,15 @@ func (s *server) updateUserBlocklist(action events.BlocklistChangeAction) http.H
 
 		blockedJIDs := make([]string, 0)
 		if blocklist != nil {
-			blockedJIDs = make([]string, 0, len(blocklist.JIDs))
-			for _, blockedJID := range blocklist.JIDs {
-				blockedJIDs = append(blockedJIDs, blockedJID.String())
+			blockedJIDs = make([]string, 0, len(blocklist.Items))
+			for _, blockedJID := range blocklist.Items {
+				if blockedJID.Active {
+					jid := blockedJID.PN
+					if jid.IsEmpty() {
+						jid = blockedJID.LID
+					}
+					blockedJIDs = append(blockedJIDs, jid.String())
+				}
 			}
 		}
 
@@ -4171,7 +4177,7 @@ func updateBlocklistWithResolvedJID(ctx context.Context, client *whatsmeow.Clien
 		return jid, nil, err
 	}
 
-	blocklist, err := client.UpdateBlocklist(ctx, blocklistJID, action)
+	blocklist, err := client.UpdateBlocklist(ctx, blocklistJID, action, "")
 	return blocklistJID, blocklist, err
 }
 
@@ -4220,9 +4226,15 @@ func formatBlocklist(blocklist *types.Blocklist) map[string]interface{} {
 	jids := []string{}
 	dhash := ""
 	if blocklist != nil {
-		jids = make([]string, len(blocklist.JIDs))
-		for i, blockedJID := range blocklist.JIDs {
-			jids[i] = blockedJID.String()
+		jids = make([]string, 0, len(blocklist.Items))
+		for _, blockedJID := range blocklist.Items {
+			if blockedJID.Active {
+				jid := blockedJID.PN
+				if jid.IsEmpty() {
+					jid = blockedJID.LID
+				}
+				jids = append(jids, jid.String())
+			}
 		}
 		dhash = blocklist.DHash
 	}
@@ -4245,7 +4257,7 @@ func (s *server) GetBlocklist() http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
-		blocklist, err := client.GetBlocklist(ctx)
+		blocklist, err := client.GetBlocklist(ctx, "")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to get blocklist: %w", err))
 			return
@@ -7473,16 +7485,15 @@ func (s *server) syncHistoryForChat(ctx context.Context, userID string, chatJID 
 }
 
 // save outgoing message to history
-func (s *server) saveOutgoingMessageToHistory(userID, chatJID, messageID, messageType, textContent, mediaLink string, historyLimit int) {
+func (s *server) saveOutgoingMessageToHistory(userID, chatJID, messageID, messageType, textContent, mediaLink string, historyLimit int, sentAt ...time.Time) {
 	if historyLimit > 0 {
-		err := s.saveMessageToHistory(userID, chatJID, "me", messageID, messageType, textContent, mediaLink, "", "")
+		var timestamp time.Time
+		if len(sentAt) > 0 {
+			timestamp = sentAt[0]
+		}
+		err := s.saveMessageToHistory(userID, chatJID, "me", messageID, messageType, textContent, mediaLink, "", "", timestamp)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to save outgoing message to history")
-		} else {
-			err = s.trimMessageHistory(userID, chatJID, historyLimit)
-			if err != nil {
-				log.Error().Err(err).Msg("Failed to trim message history")
-			}
 		}
 	}
 }

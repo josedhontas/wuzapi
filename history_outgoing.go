@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"go.mau.fi/whatsmeow"
@@ -10,6 +12,35 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
+
+func (s *server) saveOutgoingRow(userID, chatJID, messageID, messageType, textContent, mediaLink, quotedMessageID string, sentAt time.Time, historyLimit int, message *waE2E.Message) {
+	if historyLimit <= 0 {
+		return
+	}
+	event := &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{
+				Chat:     types.JID{},
+				IsFromMe: true,
+			},
+			ID:        types.MessageID(messageID),
+			Timestamp: sentAt,
+		},
+		Message: message,
+	}
+	// Preserve the chat JID in the serialized event, matching received event data.
+	if chat, err := types.ParseJID(chatJID); err == nil {
+		event.Info.Chat = chat
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal outgoing history action")
+		return
+	}
+	if err = s.saveMessageToHistory(userID, chatJID, "me", messageID, messageType, textContent, mediaLink, quotedMessageID, string(data), sentAt); err != nil {
+		log.Error().Err(err).Msg("Failed to save outgoing history action")
+	}
+}
 
 // outgoingHistoryAction is the history row for a reaction, edit or revoke sent
 // through the API. Rows use the same columns as received ones: reactions and
